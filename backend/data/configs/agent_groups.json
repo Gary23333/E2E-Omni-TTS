@@ -1,0 +1,11 @@
+[
+  {
+    "id": "group_center",
+    "name": "综合智能服务中心",
+    "description": "提供一站式业务办理、技术支持与售后服务",
+    "agentIds": ["agent_reception", "agent_tech", "agent_sales", "agent_care"],
+    "defaultAgentId": "agent_reception",
+    "routerPrompt": "你是路由代理。根据用户消息判断应分流至哪位专家。\n客服专家名录：\n- agent_reception: 小欢 (总机接待)，处理天气、时间及一般问候和简单导诊。\n- agent_tech: 智工 (技术专家)，处理具体产品故障、使用方法及深度技术问题。\n- agent_sales: 倩倩 (业务顾问)，处理价格、购买、套餐详情及优惠活动。\n- agent_care: 德哥 (售后主管)，处理订单状态查询、物流异常及客户投诉。\n\n用户消息：{user_message}\n\n请返回JSON格式：{\"agent_id\":\"xxx\",\"confidence\":0.9,\"reason\":\"简述理由\"}",
+    "collaborationRules": []
+  }
+]

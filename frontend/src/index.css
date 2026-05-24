@@ -1,0 +1,298 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =====================================================================
+   Voice CS Demo — Design System
+   暗色玻璃拟态 / 极光渐变 / 高科技交互
+   ===================================================================== */
+
+:root {
+  --primary-rgb: 34, 197, 94;       /* emerald 500 */
+  --accent-rgb: 6, 182, 212;        /* cyan 500    */
+  --magenta-rgb: 217, 70, 239;      /* fuchsia 500 */
+  --slate-900-rgb: 15, 23, 42;
+  --bg-deep: #020617;
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-[#020617] text-slate-200 antialiased selection:bg-primary-500/30 selection:text-white overflow-hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  /* 让原生 select option 在 Mac 上也能保持暗色 */
+  select option {
+    background-color: #0f172a;
+    color: #e2e8f0;
+  }
+
+  /* 自定义 range 样式 */
+  input[type="range"] {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    background: linear-gradient(135deg, #22c55e, #06b6d4);
+    box-shadow: 0 0 14px rgba(34, 197, 94, 0.6);
+    cursor: pointer;
+  }
+}
+
+/* =====================================================================
+   Immersive Background Engine
+   ===================================================================== */
+.bg-mesh {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-color: #020617;
+  background-image:
+    radial-gradient(at 0% 0%, rgba(34, 197, 94, 0.18) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(6, 182, 212, 0.18) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(217, 70, 239, 0.12) 0px, transparent 50%),
+    radial-gradient(at 0% 100%, rgba(59, 130, 246, 0.12) 0px, transparent 50%);
+  filter: contrast(1.1);
+  animation: bgDrift 30s ease-in-out infinite;
+}
+
+/* 网格 + 噪点叠加层 */
+.bg-mesh::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
+  pointer-events: none;
+}
+
+.bg-mesh::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.6 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  opacity: 0.035;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+}
+
+@keyframes bgDrift {
+  0%, 100% { background-position: 0% 0%, 100% 0%, 100% 100%, 0% 100%; }
+  50%      { background-position: 5% 5%, 95% 5%, 95% 95%, 5% 95%; }
+}
+
+/* 极光光斑（可叠加在 bg-mesh 之上） */
+.aurora {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.55;
+  pointer-events: none;
+  will-change: transform;
+}
+.aurora-1 { width: 480px; height: 480px; background: rgba(34,197,94,.35); top: -120px; left: -120px; animation: floatY 16s ease-in-out infinite; }
+.aurora-2 { width: 520px; height: 520px; background: rgba(6,182,212,.30); top: 40%; right: -160px; animation: floatY 22s ease-in-out infinite reverse; }
+.aurora-3 { width: 420px; height: 420px; background: rgba(217,70,239,.22); bottom: -160px; left: 30%; animation: floatY 28s ease-in-out infinite; }
+
+@keyframes floatY {
+  0%, 100% { transform: translateY(0) translateX(0) scale(1); }
+  50%      { transform: translateY(-40px) translateX(20px) scale(1.06); }
+}
+
+/* =====================================================================
+   Glassmorphism Surfaces
+   ===================================================================== */
+.glass-panel {
+  @apply bg-slate-950/40 backdrop-blur-3xl border border-white/[0.06];
+  box-shadow:
+    0 30px 80px -20px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.glass-card,
+.glass-card-modern {
+  @apply bg-white/[0.03] backdrop-blur-2xl border border-white/[0.08] transition-all duration-500;
+  box-shadow:
+    0 18px 40px -16px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.glass-card:hover,
+.glass-card-modern:hover {
+  @apply border-white/[0.16] bg-white/[0.05];
+  box-shadow:
+    0 24px 50px -16px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* 光斑边框：对 ::before 用渐变描边 */
+.glass-card-glow {
+  position: relative;
+  isolation: isolate;
+}
+.glass-card-glow::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg,
+    rgba(34, 197, 94, 0.45),
+    rgba(6, 182, 212, 0.0) 40%,
+    rgba(217, 70, 239, 0.0) 60%,
+    rgba(6, 182, 212, 0.45));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: 0;
+  transition: opacity .6s ease;
+  pointer-events: none;
+  z-index: 0;
+}
+.glass-card-glow:hover::before { opacity: 1; }
+
+/* =====================================================================
+   Animations
+   ===================================================================== */
+@keyframes float {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50%      { transform: translateY(-20px) scale(1.05); }
+}
+.animate-float { animation: float 10s ease-in-out infinite; }
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 20px rgba(34, 197, 94, 0.35), 0 0 40px rgba(6, 182, 212, 0.15); }
+  50%      { box-shadow: 0 0 40px rgba(34, 197, 94, 0.6),  0 0 80px rgba(6, 182, 212, 0.30); }
+}
+.animate-pulse-glow { animation: pulse-glow 2.4s ease-in-out infinite; }
+
+/* fade-in / slide-in 兼容 (Tailwind 没有 animate-in 默认插件，这里手写) */
+.animate-in            { animation-duration: var(--ai-d, 500ms); animation-fill-mode: both; }
+.fade-in               { animation-name: fadeIn; }
+.slide-in-from-bottom-2 { animation-name: slideInFromBottom2; }
+.slide-in-from-bottom-4 { animation-name: slideInFromBottom4; }
+.duration-300 { --ai-d: 300ms; }
+.duration-500 { --ai-d: 500ms; }
+.duration-700 { --ai-d: 700ms; }
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes slideInFromBottom2 {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideInFromBottom4 {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* 三段交错跳动（用于 WaitingOverlay 的小圆点） */
+@keyframes dotBounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.6; }
+  40%           { transform: translateY(-8px); opacity: 1; }
+}
+.dot-bounce-1 { animation: dotBounce 1.2s infinite ease-in-out; animation-delay: 0s; }
+.dot-bounce-2 { animation: dotBounce 1.2s infinite ease-in-out; animation-delay: 0.18s; }
+.dot-bounce-3 { animation: dotBounce 1.2s infinite ease-in-out; animation-delay: 0.36s; }
+
+/* 渐变文字 */
+@keyframes gradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+.text-gradient,
+.text-gradient-primary {
+  background: linear-gradient(120deg, #22c55e 0%, #06b6d4 50%, #d946ef 100%);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+          background-clip: text;
+  color: transparent;
+  animation: gradientShift 8s ease-in-out infinite;
+}
+
+.text-gradient-modern {
+  @apply bg-clip-text text-transparent bg-gradient-to-br from-white via-white to-white/40;
+}
+
+.text-glow-primary {
+  text-shadow: 0 0 18px rgba(34, 197, 94, 0.55);
+}
+
+/* shadow-glow 兼容（保留旧调用点） */
+.shadow-glow {
+  box-shadow:
+    0 8px 24px -6px rgba(34, 197, 94, 0.45),
+    0 0 30px rgba(6, 182, 212, 0.18);
+}
+.shadow-soft {
+  box-shadow: 0 6px 24px -2px rgba(0, 0, 0, 0.35);
+}
+
+/* =====================================================================
+   Scrollbars
+   ===================================================================== */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+
+.custom-scrollbar::-webkit-scrollbar           { width: 6px; height: 6px; }
+.custom-scrollbar::-webkit-scrollbar-track     { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb     { background: rgba(255,255,255,0.10); border-radius: 9999px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.20); }
+
+/* =====================================================================
+   Utility extras
+   ===================================================================== */
+.mask-fade-out {
+  mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+}
+
+.border-gradient {
+  border-image: linear-gradient(to bottom right,
+    rgba(255,255,255,0.20),
+    rgba(255,255,255,0.02)) 1;
+}
+
+/* 等宽数字（计时器、版本号） */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 通用按压交互 */
+.press {
+  transition: transform .15s ease, box-shadow .25s ease;
+}
+.press:active {
+  transform: translateY(1px) scale(0.985);
+}
+
+/* 音频波形条 */
+@keyframes waveBounce {
+  0%, 100% { transform: scaleY(0.25); }
+  50%      { transform: scaleY(1); }
+}
+.wave-bar {
+  display: inline-block;
+  width: 3px;
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(to top, rgba(34,197,94,.85), rgba(6,182,212,.85));
+  transform-origin: center;
+  animation: waveBounce 1s ease-in-out infinite;
+}

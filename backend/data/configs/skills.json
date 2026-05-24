@@ -1,0 +1,94 @@
+[
+  {
+    "id": "skill_time",
+    "name": "get_current_time",
+    "description": "获取当前准确的时间和日期",
+    "type": "builtin",
+    "enabled": true,
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "timezone": { "type": "string", "description": "时区，如 Asia/Shanghai" }
+      }
+    },
+    "config": { "url": null, "method": "GET", "headers": {}, "code": null }
+  },
+  {
+    "id": "skill_weather",
+    "name": "get_weather",
+    "description": "查询指定城市的天气预报",
+    "type": "http",
+    "enabled": true,
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "city": { "type": "string", "description": "城市名称，如 北京" }
+      },
+      "required": ["city"]
+    },
+    "config": {
+      "url": "https://api.senverse.com/v3/weather/now.json",
+      "method": "GET",
+      "headers": {},
+      "code": null
+    }
+  },
+  {
+    "id": "skill_order",
+    "name": "query_order",
+    "description": "查询客户的物流状态或订单详情",
+    "type": "http",
+    "enabled": true,
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "order_id": { "type": "string", "description": "订单号" }
+      },
+      "required": ["order_id"]
+    },
+    "config": {
+      "url": "https://mock-api.com/order/status",
+      "method": "POST",
+      "headers": { "Content-Type": "application/json" },
+      "code": null
+    }
+  },
+  {
+    "id": "skill_ticket",
+    "name": "create_ticket",
+    "description": "为客户创建服务工单或投诉记录",
+    "type": "http",
+    "enabled": true,
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "工单标题" },
+        "content": { "type": "string", "description": "详细内容" },
+        "priority": { "type": "string", "enum": ["low", "normal", "high"] }
+      },
+      "required": ["title", "content"]
+    },
+    "config": {
+      "url": "https://mock-api.com/ticket/create",
+      "method": "POST",
+      "headers": {},
+      "code": null
+    }
+  },
+  {
+    "id": "skill_transfer",
+    "name": "transfer_call",
+    "description": "将当前通话转交给特定的客服人员",
+    "type": "builtin",
+    "enabled": true,
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target_agent_id": { "type": "string", "description": "目标客服ID" },
+        "reason": { "type": "string", "description": "转接的上下文说明" }
+      },
+      "required": ["target_agent_id", "reason"]
+    },
+    "config": { "url": null, "method": "GET", "headers": {}, "code": null }
+  }
+]

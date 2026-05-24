@@ -1,0 +1,50 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+.tts-venv/
+env/
+venv/
+ENV/
+
+# ── Node.js ──
+node_modules/
+
+# ── Build outputs ──
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# ── Environment / Secrets ──
+.env
+.env.local
+.env.*.local
+
+# ── macOS ──
+.DS_Store
+
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Project specific ──
+# User-specific runtime config (contains API keys)
+backend/data/configs/global_config.json
+
+# Large model files
+backend/pretrained_models/
+
+# Generated / test audio files
+test_output_*.wav
+final_tts_output.wav
+*.pcm
+*.log
