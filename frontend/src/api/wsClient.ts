@@ -1,10 +1,12 @@
 import type { WSMessage } from '../types';
 
 type MessageHandler = (msg: WSMessage) => void;
+type BinaryHandler = (data: ArrayBuffer) => void;
 
 export class VoiceWSClient {
   private ws: WebSocket | null = null;
   private handlers: MessageHandler[] = [];
+  private binaryHandlers: BinaryHandler[] = [];
   private sessionId: string;
   private reconnectAttempts = 0;
   private maxReconnect = 3;
@@ -17,6 +19,13 @@ export class VoiceWSClient {
     this.handlers.push(handler);
     return () => {
       this.handlers = this.handlers.filter(h => h !== handler);
+    };
+  }
+
+  onBinary(handler: BinaryHandler) {
+    this.binaryHandlers.push(handler);
+    return () => {
+      this.binaryHandlers = this.binaryHandlers.filter(h => h !== handler);
     };
   }
 
@@ -51,6 +60,8 @@ export class VoiceWSClient {
           } catch {
             console.warn('Invalid WS message:', event.data);
           }
+        } else if (event.data instanceof ArrayBuffer) {
+          this.binaryHandlers.forEach(h => h(event.data as ArrayBuffer));
         }
       };
     });

@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class LLMClient:
-    """Async OpenAI-compatible LLM client."""
+    """Async OpenAI-compatible LLM client with function calling support."""
 
     def __init__(self, endpoint: str, api_key: str = "", model: str = "gpt-4o"):
         self.endpoint = endpoint.rstrip("/")
@@ -43,14 +43,24 @@ class LLMClient:
     def _extract_delta_text(self, delta: dict) -> str:
         return delta.get("content") or ""
 
+    def _extract_delta_tool_calls(self, delta: dict) -> list[dict]:
+        return delta.get("tool_calls", []) or []
+
     async def chat(
         self,
         messages: list[dict],
         temperature: float = 0.7,
         max_tokens: int = 1024,
         stream: bool = False,
+        tools: Optional[list[dict]] = None,
+        tool_choice: Optional[str] = None,
     ):
-        """Send chat completion request. Returns full text or async token generator."""
+        """Send chat completion request. Returns full text or async token generator.
+
+        Args:
+            tools: OpenAI-compatible tool definitions for function calling.
+            tool_choice: "auto", "none", or forced function name.
+        """
         url = f"{self.endpoint}/chat/completions"
         body = {
             "model": self.model,
@@ -59,6 +69,11 @@ class LLMClient:
             "stream": stream,
             self._token_limit_param(): max_tokens,
         }
+
+        if tools:
+            body["tools"] = tools
+        if tool_choice:
+            body["tool_choice"] = tool_choice
 
         if stream:
             return self._stream_chat(url, body)
@@ -73,6 +88,11 @@ class LLMClient:
             return self._extract_message_text(data["choices"][0]["message"])
 
     async def _stream_chat(self, url: str, body: dict) -> AsyncGenerator[str, None]:
+        """Stream chat completion. Yields text tokens and tool_call JSON fragments.
+
+        When a tool_call is detected, yields a special JSON string:
+        {"__tool_call__": {"name": "...", "arguments": "..."}}
+        """
         async with httpx.AsyncClient(timeout=120.0) as client:
             async with client.stream("POST", url, json=body, headers=self._headers()) as resp:
                 resp.raise_for_status()
@@ -85,8 +105,18 @@ class LLMClient:
                     try:
                         chunk = json.loads(payload)
                         delta = chunk["choices"][0].get("delta", {})
+
+                        # Regular content
                         content = self._extract_delta_text(delta)
                         if content:
                             yield content
+
+                        # Tool calls
+                        tool_calls = self._extract_delta_tool_calls(delta)
+                        for tc in tool_calls:
+                            func = tc.get("function", {})
+                            if func.get("name") or func.get("arguments"):
+                                yield json.dumps({"__tool_call__": func}, ensure_ascii=False)
+
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue

@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Optional, Union, List, Dict, Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from schemas.models import Agent, AgentGroup, GlobalConfig, LLMMode, TranscriptEntry
+from schemas.models import Agent, AgentGroup, GlobalConfig, LLMMode, TranscriptEntry, Session
 from core.json_store import JsonStore, ConfigStore
 from core.llm_client import LLMClient
 from core.tts_client import TTSClient
@@ -88,6 +88,7 @@ def _get_wav_header(pcm_data: bytes, sample_rate: int = 16000) -> bytes:
 agent_store = JsonStore("agents.json", Agent)
 group_store = JsonStore("agent_groups.json", AgentGroup)
 skill_store = JsonStore("skills.json", Skill)
+session_store = JsonStore("sessions.json", Session)
 
 DEFAULTS = GlobalConfig().model_dump()
 config_store = ConfigStore("global_config.json", DEFAULTS)
@@ -123,6 +124,21 @@ async def voice_ws(ws: WebSocket, session_id: str):
     audio_buffer: List[bytes] = []
     send_lock = asyncio.Lock()
     active_response: Dict[str, Any] = {"task": None, "bridge": None}
+    current_session: Optional[Session] = None
+
+    def _now() -> str:
+        return datetime.now().isoformat()
+
+    def _save_session():
+        if current_session:
+            current_session.transcript = [
+                TranscriptEntry(**{k: v for k, v in entry.items() if k in TranscriptEntry.model_fields})
+                for entry in transcript
+            ]
+            try:
+                session_store.save(current_session)
+            except Exception as e:
+                logger.warning(f"Failed to save session: {e}")
 
     async def send_json(msg: Dict[str, Any]):
         try:
@@ -139,7 +155,15 @@ async def voice_ws(ws: WebSocket, session_id: str):
             pass
 
     class StreamingTTSBridge:
-        """Queues LLM text fragments and speaks them through streaming TTS."""
+        """Queues LLM text fragments and speaks them through streaming TTS.
+
+        Uses aggressive early-flushing: if buffer exceeds MIN_EAGER_FLUSH_CHARS
+        and no strong break is found within EAGER_FLUSH_WINDOW, we flush at the
+        last soft break to start TTS as early as possible.
+        """
+
+        MIN_EAGER_FLUSH_CHARS = 24
+        EAGER_FLUSH_WINDOW = 48
 
         def __init__(self, agent: Agent):
             self.agent = agent
@@ -186,14 +210,24 @@ async def voice_ws(ws: WebSocket, session_id: str):
             if stripped != self.buffer:
                 self.buffer = stripped
 
+            # 1. Strong break with minimum length -> ideal segment
             strong_idx = self._first_break_index(STRONG_TTS_BREAKS)
             if strong_idx >= 0 and strong_idx + 1 >= MIN_TTS_SEGMENT_CHARS:
                 return self._take(strong_idx + 1)
 
+            # 2. Soft break with relaxed minimum -> good enough
             soft_idx = self._last_break_index(SOFT_TTS_BREAKS)
-            if soft_idx >= 0 and soft_idx + 1 >= 28:
+            if soft_idx >= 0 and soft_idx + 1 >= 20:
                 return self._take(soft_idx + 1)
 
+            # 3. Eager flush: if we have enough chars and a soft break within window,
+            #    flush early to reduce TTS latency
+            if len(self.buffer) >= self.MIN_EAGER_FLUSH_CHARS:
+                eager_soft = self._last_break_index_in_window(SOFT_TTS_BREAKS, self.EAGER_FLUSH_WINDOW)
+                if eager_soft >= self.MIN_EAGER_FLUSH_CHARS - 4:
+                    return self._take(eager_soft + 1)
+
+            # 4. Hard cap -> force split
             if len(self.buffer) >= MAX_TTS_SEGMENT_CHARS:
                 return self._take(MAX_TTS_SEGMENT_CHARS)
 
@@ -205,6 +239,12 @@ async def voice_ws(ws: WebSocket, session_id: str):
 
         def _last_break_index(self, chars: str) -> int:
             indexes = [self.buffer.rfind(ch) for ch in chars if self.buffer.rfind(ch) >= 0]
+            return max(indexes) if indexes else -1
+
+        def _last_break_index_in_window(self, chars: str, window: int) -> int:
+            """Find the last break char within the first `window` characters."""
+            search_area = self.buffer[:window]
+            indexes = [search_area.rfind(ch) for ch in chars if search_area.rfind(ch) >= 0]
             return max(indexes) if indexes else -1
 
         def _take(self, end: int) -> str:
@@ -255,21 +295,24 @@ async def voice_ws(ws: WebSocket, session_id: str):
         tts_bridge: Optional[StreamingTTSBridge] = None,
     ):
         await send_json({"type": "llm_done"})
-        
+
         # Handle handoff
         if handoff:
             target = next((a for a in manager._agents if a.id == handoff), None)
             if target:
                 handoff_msg = f"正在为您转接至{target.name}，请稍候..."
                 await send_json({"type": "waiting_start", "message": handoff_msg})
-                transcript.append({"role": "system", "text": handoff_msg})
+                transcript.append({"role": "system", "text": handoff_msg, "timestamp": _now()})
                 await send_json({"type": "agent_switch", "agentId": target.id, "agentName": target.name})
                 await send_json({"type": "waiting_end"})
                 manager._active_agent = target
+                if current_session:
+                    current_session.activeAgentId = target.id
 
         # TTS
-        transcript.append({"role": "agent", "text": text, "agentName": agent.name})
+        transcript.append({"role": "agent", "text": text, "agentName": agent.name, "timestamp": _now()})
         await send_json({"type": "transcript_entry", "role": "agent", "text": text, "agentName": agent.name})
+        _save_session()
 
         if tts_bridge:
             await tts_bridge.finish()
@@ -414,6 +457,17 @@ async def voice_ws(ws: WebSocket, session_id: str):
 
                         manager.set_context(agents, group, default_agent)
 
+                        # Initialize session
+                        current_session = Session(
+                            id=session_id,
+                            scenario=scenario,
+                            agentGroupId=group_id,
+                            activeAgentId=default_agent.id,
+                            startedAt=_now(),
+                            status="active",
+                        )
+                        _save_session()
+
                         await send_json({
                             "type": "call_started",
                             "sessionId": session_id,
@@ -424,7 +478,7 @@ async def voice_ws(ws: WebSocket, session_id: str):
 
                         if scenario == "inbound":
                             greeting = f"您好，我是{default_agent.name}，很高兴为您服务。请问有什么可以帮您？"
-                            transcript.append({"role": "agent", "text": greeting, "agentName": default_agent.name})
+                            transcript.append({"role": "agent", "text": greeting, "agentName": default_agent.name, "timestamp": _now()})
                             await send_json({"type": "transcript_entry", "role": "agent", "text": greeting, "agentName": default_agent.name})
 
                             await speak_text(greeting, default_agent)
@@ -442,8 +496,9 @@ async def voice_ws(ws: WebSocket, session_id: str):
                         text = msg.get("text", "").strip()
                         if not text: continue
 
-                        transcript.append({"role": "user", "text": text})
+                        transcript.append({"role": "user", "text": text, "timestamp": _now()})
                         await send_json({"type": "transcript_entry", "role": "user", "text": text})
+                        _save_session()
 
                         active = manager._active_agent or (manager._agents[0] if manager._agents else None)
                         if not active:
@@ -479,6 +534,10 @@ async def voice_ws(ws: WebSocket, session_id: str):
                     # ── End call ──
                     elif msg_type == "end_call":
                         await cancel_active_response(send_stop=True)
+                        if current_session:
+                            current_session.status = "ended"
+                            current_session.endedAt = _now()
+                            _save_session()
                         await send_json({"type": "call_ended", "sessionId": session_id})
                         transcript = []
                         break

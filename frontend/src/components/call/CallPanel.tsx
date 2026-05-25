@@ -67,15 +67,9 @@ export function CallPanel() {
     call.setLLMPartial('');
 
     try {
-      const client = await ws.connect(sessionId);
-      const wsInstance = (client as any).ws as WebSocket | null;
-      if (wsInstance) {
-        wsInstance.addEventListener('message', (event: MessageEvent) => {
-          if (event.data instanceof ArrayBuffer) {
-            player.playChunk(event.data);
-          }
-        });
-      }
+      await ws.connect(sessionId, (data: ArrayBuffer) => {
+        player.playChunk(data);
+      });
 
       ws.startCall(call.scenario, call.inputMode, call.agentGroupId);
     } catch (err) {
