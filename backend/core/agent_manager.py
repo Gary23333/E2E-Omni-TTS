@@ -103,7 +103,7 @@ class AgentManager:
 
         # Tools section
         tools_section = ""
-        tool_defs = self.skill_executor.get_tool_definitions()
+        tool_defs = self.skill_executor.get_tool_definitions(agent.enabledToolIds or None)
         if tool_defs and tool_defs != "无可用工具":
             tools_section = TOOL_CALL_TEMPLATE.format(tool_definitions=tool_defs)
 
@@ -154,7 +154,9 @@ class AgentManager:
 
                 async for token in stream:
                     full_response += token
-                
+                    if on_token:
+                        await on_token(token)
+
                 logger.info(f"LLM full response received: {full_response}")
             except Exception as e:
                 logger.error(f"LLM chat error: {e}")
@@ -193,9 +195,6 @@ class AgentManager:
             if handoff_match:
                 handoff_target = handoff_match.group(1)
                 full_response = re.sub(r'\[HANDOFF:\w+\]', '', full_response).strip()
-
-            if on_token:
-                await on_token(full_response)
 
             # Save to history
             self._history.append({"role": "user", "content": user_message})

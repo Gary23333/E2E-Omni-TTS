@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useSettingsStore } from './stores/settingsStore';
 import { useAgentStore } from './stores/agentStore';
 import { Sidebar } from './components/layout/Sidebar';
@@ -8,10 +9,33 @@ import { RAGManager } from './components/config/RAGManager';
 import { SkillManager } from './components/config/SkillManager';
 import { SettingsPanel } from './components/config/SettingsPanel';
 
-type Page = 'call' | 'agents' | 'rag' | 'skills' | 'settings';
+function AppLayout() {
+  return (
+    <div className="h-screen flex overflow-hidden relative bg-[#020617]">
+      {/* Immersive background layer */}
+      <div className="bg-mesh" />
+      
+      {/* Sidebar navigation */}
+      <Sidebar />
+      
+      {/* Main interaction stage */}
+      <main className="flex-1 overflow-hidden relative z-10 py-6 pr-6">
+        <div className="h-full glass-panel rounded-[3rem] overflow-hidden shadow-2xl transition-all duration-700">
+          <Routes>
+            <Route path="/call" element={<CallPanel />} />
+            <Route path="/agents" element={<AgentConfig />} />
+            <Route path="/rag" element={<RAGManager />} />
+            <Route path="/skills" element={<SkillManager />} />
+            <Route path="/settings" element={<SettingsPanel />} />
+            <Route path="/" element={<Navigate to="/call" replace />} />
+          </Routes>
+        </div>
+      </main>
+    </div>
+  );
+}
 
 export default function App() {
-  const [page, setPage] = useState<Page>('call');
   const settingsLoaded = useSettingsStore(s => s.loaded);
   const loadSettings = useSettingsStore(s => s.load);
   const loadAgents = useAgentStore(s => s.load);
@@ -36,30 +60,8 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen flex overflow-hidden relative bg-[#020617]">
-      {/* Immersive background layer */}
-      <div className="bg-mesh" />
-      
-      {/* Sidebar navigation */}
-      <Sidebar currentPage={page} onNavigate={setPage} />
-      
-      {/* Main interaction stage */}
-      <main className="flex-1 overflow-hidden relative z-10 py-6 pr-6">
-        <div className="h-full glass-panel rounded-[3rem] overflow-hidden shadow-2xl transition-all duration-700">
-          <PageContent page={page} />
-        </div>
-      </main>
-    </div>
+    <BrowserRouter>
+      <AppLayout />
+    </BrowserRouter>
   );
-}
-
-function PageContent({ page }: { page: Page }) {
-  switch (page) {
-    case 'call': return <CallPanel />;
-    case 'agents': return <AgentConfig />;
-    case 'rag': return <RAGManager />;
-    case 'skills': return <SkillManager />;
-    case 'settings': return <SettingsPanel />;
-    default: return <CallPanel />;
-  }
 }

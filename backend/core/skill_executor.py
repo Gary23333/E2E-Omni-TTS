@@ -118,10 +118,16 @@ class SkillExecutor:
     def update_skills(self, skills: list[Skill]):
         self._skills = {s.name: s for s in skills if s.enabled}
 
-    def get_tool_definitions(self) -> str:
-        """Format enabled skills as tool definitions for LLM prompt."""
+    def get_tool_definitions(self, enabled_tool_ids: list[str] | None = None) -> str:
+        """Format enabled skills as tool definitions for LLM prompt.
+
+        Args:
+            enabled_tool_ids: If provided, only include skills whose IDs are in this list.
+        """
         lines = []
         for name, skill in self._skills.items():
+            if enabled_tool_ids is not None and skill.id not in enabled_tool_ids:
+                continue
             params = skill.parameters.get("properties", {})
             param_str = ", ".join(f"{k}: {v.get('type', 'string')}" for k, v in params.items())
             lines.append(f"- {name}({param_str}): {skill.description}")
@@ -142,7 +148,13 @@ class SkillExecutor:
         return tools
 
     def parse_tool_call(self, llm_output: str):  # returns tuple[str, dict] or None
-        """Try to extract a tool call from LLM output."""
+        """Try to extract a tool call from LLM output.
+
+        Supports two formats:
+        1. OpenAI function-calling streaming format (via __tool_call__ marker)
+        2. Legacy JSON format: {"tool_call": {"name": "...", "arguments": {...}}}
+        """
+        # 1. Try OpenAI function-calling format (marked by __tool_call__)
         decoder = json.JSONDecoder()
         candidates = [llm_output.strip()]
         candidates.extend(llm_output[i:] for i, ch in enumerate(llm_output) if ch == "{")
@@ -152,10 +164,26 @@ class SkillExecutor:
                 data, _ = decoder.raw_decode(candidate.lstrip())
             except json.JSONDecodeError:
                 continue
-            if isinstance(data, dict) and "tool_call" in data:
-                tc = data["tool_call"]
-                if isinstance(tc, dict):
-                    return tc.get("name", ""), tc.get("arguments", {})
+            if isinstance(data, dict):
+                # OpenAI streaming tool_call format
+                if "__tool_call__" in data:
+                    tc = data["__tool_call__"]
+                    if isinstance(tc, dict):
+                        name = tc.get("name", "")
+                        args = tc.get("arguments", "")
+                        # arguments may be a JSON string in streaming mode
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except json.JSONDecodeError:
+                                args = {}
+                        return name, args if isinstance(args, dict) else {}
+
+                # Legacy format
+                if "tool_call" in data:
+                    tc = data["tool_call"]
+                    if isinstance(tc, dict):
+                        return tc.get("name", ""), tc.get("arguments", {})
 
         return None
 
