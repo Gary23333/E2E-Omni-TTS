@@ -96,7 +96,7 @@ export function Sidebar({ currentPage, onNavigate }: Props) {
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-tighter">System Online</span>
             </div>
-            <span className="text-[10px] text-white/30 font-mono">v0.4.1</span>
+            <span className="text-[10px] text-white/30 font-mono">v0.5.0</span>
           </div>
           
           <div className="flex items-center gap-3">

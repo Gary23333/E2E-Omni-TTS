@@ -43,8 +43,21 @@ backend/data/configs/global_config.json
 # Large model files
 backend/pretrained_models/
 
+# RAG files and indexes
+backend/data/rag_files/
+backend/data/faiss_index/
+backend/data/embed_model/
+
 # Generated / test audio files
 test_output_*.wav
 final_tts_output.wav
 *.pcm
 *.log
+
+# ── Logs ──
+*.log
+logs/
+
+# ── Temporary files ──
+*.tmp
+*.temp

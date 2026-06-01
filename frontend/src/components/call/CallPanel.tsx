@@ -68,14 +68,11 @@ export function CallPanel() {
 
     try {
       const client = await ws.connect(sessionId);
-      const wsInstance = (client as any).ws as WebSocket | null;
-      if (wsInstance) {
-        wsInstance.addEventListener('message', (event: MessageEvent) => {
-          if (event.data instanceof ArrayBuffer) {
-            player.playChunk(event.data);
-          }
-        });
-      }
+
+      // Register binary handler for audio chunks
+      ws.onBinary((data: ArrayBuffer) => {
+        player.playChunk(data);
+      });
 
       ws.startCall(call.scenario, call.inputMode, call.agentGroupId);
     } catch (err) {

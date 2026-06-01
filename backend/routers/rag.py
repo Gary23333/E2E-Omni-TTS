@@ -6,16 +6,25 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from pathlib import Path
 
 from schemas.models import RAGDocument, DocStatus, GlobalConfig
-from core.json_store import JsonStore
+from core.json_store import JsonStore, ConfigStore
 from core.rag_engine import RAGEngine, RAG_DIR
-from routers.ws_voice import config_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 doc_store = JsonStore("rag_documents.json", RAGDocument)
-# Share engine instance or create new one and sync config
-rag_engine = RAGEngine()
+
+# These will be set by create_router()
+_config_store: ConfigStore = None
+_rag_engine: RAGEngine = None
+
+
+def create_router(config_store: ConfigStore, rag_engine: RAGEngine) -> APIRouter:
+    """Create router with injected dependencies."""
+    global _config_store, _rag_engine
+    _config_store = config_store
+    _rag_engine = rag_engine
+    return router
 
 
 @router.get("")
@@ -26,9 +35,9 @@ async def list_documents():
 @router.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
     # Sync config before processing
-    cfg = GlobalConfig(**config_store.get_all())
-    rag_engine.set_config(cfg)
-    
+    cfg = GlobalConfig(**_config_store.get_all())
+    _rag_engine.set_config(cfg)
+
     doc_id = RAGDocument().id
     doc_dir = RAG_DIR / doc_id
     doc_dir.mkdir(parents=True, exist_ok=True)
@@ -50,7 +59,7 @@ async def upload_document(file: UploadFile = File(...)):
 
     # Process
     try:
-        chunk_count = rag_engine.process_document(doc_id, str(file_path), file.filename)
+        chunk_count = _rag_engine.process_document(doc_id, str(file_path), file.filename)
         doc_store.update(doc_id, {
             "status": DocStatus.READY.value,
             "chunkCount": chunk_count,
@@ -77,7 +86,7 @@ async def delete_document(doc_id: str):
         shutil.rmtree(doc_dir)
 
     doc_store.delete(doc_id)
-    rag_engine.rebuild_index()
+    _rag_engine.rebuild_index()
     return {"ok": True}
 
 
@@ -89,9 +98,9 @@ async def toggle_document(doc_id: str):
 
     new_enabled = not doc.enabled
     doc_store.update(doc_id, {"enabled": new_enabled})
-    
+
     # Sync config before rebuild
-    cfg = GlobalConfig(**config_store.get_all())
-    rag_engine.set_config(cfg)
-    rag_engine.rebuild_index()
+    cfg = GlobalConfig(**_config_store.get_all())
+    _rag_engine.set_config(cfg)
+    _rag_engine.rebuild_index()
     return doc_store.get(doc_id)

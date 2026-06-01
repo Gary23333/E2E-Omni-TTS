@@ -5,9 +5,10 @@ from typing import AsyncGenerator, Optional, Callable, Awaitable
 
 from schemas.models import Agent, AgentGroup, GlobalConfig
 from core.llm_client import LLMClient
-from core.tts_client import TTSClient, mix_noise
+from core.tts_client import TTSClient
 from core.skill_executor import SkillExecutor
 from core.rag_engine import RAGEngine
+from core.noise_manager import noise_manager
 from prompts.templates import (
     ROUTER_PROMPT, AGENT_SYSTEM_PROMPT, RAG_CONTEXT_TEMPLATE,
     TOOL_CALL_TEMPLATE, TOOL_RESULT_TEMPLATE, WAITING_MESSAGES,
@@ -41,6 +42,36 @@ class AgentManager:
         self._agent_group = group
         self._active_agent = active_agent
         self._history = []
+
+    @property
+    def active_agent(self) -> Optional[Agent]:
+        """Get the currently active agent."""
+        return self._active_agent
+
+    @active_agent.setter
+    def active_agent(self, agent: Agent):
+        """Set the active agent."""
+        self._active_agent = agent
+
+    @property
+    def agents(self) -> list[Agent]:
+        """Get all agents in the current context."""
+        return self._agents
+
+    @property
+    def agent_group(self) -> Optional[AgentGroup]:
+        """Get the current agent group."""
+        return self._agent_group
+
+    def get_agent_by_id(self, agent_id: str) -> Optional[Agent]:
+        """Find an agent by ID."""
+        return self._find_agent(agent_id)
+
+    def get_default_agent(self) -> Optional[Agent]:
+        """Get the default agent from the current context."""
+        if self._active_agent:
+            return self._active_agent
+        return self._agents[0] if self._agents else None
 
     def _find_agent(self, agent_id: str) -> Optional[Agent]:
         for a in self._agents:
@@ -154,7 +185,10 @@ class AgentManager:
 
                 async for token in stream:
                     full_response += token
-                
+                    # Call on_token for each token to enable real-time streaming
+                    if on_token and round_idx == 0:
+                        await on_token(token)
+
                 logger.info(f"LLM full response received: {full_response}")
             except Exception as e:
                 logger.error(f"LLM chat error: {e}")
@@ -193,9 +227,6 @@ class AgentManager:
             if handoff_match:
                 handoff_target = handoff_match.group(1)
                 full_response = re.sub(r'\[HANDOFF:\w+\]', '', full_response).strip()
-
-            if on_token:
-                await on_token(full_response)
 
             # Save to history
             self._history.append({"role": "user", "content": user_message})
@@ -277,10 +308,11 @@ class AgentManager:
         voice_descriptor: str = "",
         noise_type: str = "none",
         noise_volume: float = 0.0,
+        custom_noise_file: Optional[str] = None,
     ) -> AsyncGenerator[bytes, None]:
         """Synthesize speech with optional voice descriptor and noise mixing."""
         # Prepend voice descriptor for VoxCPM2 persona
         tts_input = f"{voice_descriptor}{text}" if voice_descriptor else text
 
         async for chunk in self.tts.synthesize_streaming(tts_input):
-            yield mix_noise(chunk, noise_type, noise_volume)
+            yield noise_manager.mix(chunk, noise_type, noise_volume, custom_noise_file)

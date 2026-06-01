@@ -6,19 +6,37 @@ from fastapi.staticfiles import StaticFiles
 
 from routers import agents, rag, skills, config, ws_voice
 from core.noise_manager import NOISE_DIR
+from core.rag_engine import RAGEngine
+from core.json_store import ConfigStore
+from schemas.models import GlobalConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+# Global singleton instances
+DEFAULTS = GlobalConfig().model_dump()
+config_store = ConfigStore("global_config.json", DEFAULTS)
+rag_engine = RAGEngine()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Voice CS Demo starting...")
+    logger.info("OmniVoice starting...")
+
+    # Initialize RAG engine with current config
+    cfg = GlobalConfig(**config_store.get_all())
+    rag_engine.set_config(cfg)
+
+    # Store instances in app state for dependency injection
+    app.state.config_store = config_store
+    app.state.rag_engine = rag_engine
+
     yield
-    logger.info("Voice CS Demo shutting down...")
+
+    logger.info("OmniVoice shutting down...")
 
 
-app = FastAPI(title="Voice Customer Service Demo", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="OmniVoice - End-to-End Voice Agent", version="0.5.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,11 +46,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Pass dependencies to routers
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
-app.include_router(rag.router, prefix="/api/rag", tags=["rag"])
+app.include_router(
+    rag.create_router(config_store, rag_engine),
+    prefix="/api/rag",
+    tags=["rag"]
+)
 app.include_router(skills.router, prefix="/api/skills", tags=["skills"])
-app.include_router(config.router, prefix="/api/config", tags=["config"])
-app.include_router(ws_voice.router, tags=["voice"])
+app.include_router(
+    config.create_router(config_store, rag_engine),
+    prefix="/api/config",
+    tags=["config"]
+)
+app.include_router(
+    ws_voice.create_router(config_store, rag_engine),
+    tags=["voice"]
+)
 
 # Mount noise samples for auditioning
 NOISE_DIR.mkdir(parents=True, exist_ok=True)

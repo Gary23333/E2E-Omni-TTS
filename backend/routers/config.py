@@ -6,32 +6,49 @@ import shutil
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from schemas.models import GlobalConfig
 from core.json_store import ConfigStore
+from core.rag_engine import RAGEngine
 from core.noise_manager import NOISE_DIR
 
 router = APIRouter()
 
-DEFAULTS = GlobalConfig().model_dump()
-config_store = ConfigStore("global_config.json", DEFAULTS)
+# These will be set by create_router()
+_config_store: ConfigStore = None
+_rag_engine: RAGEngine = None
+
+
+def create_router(config_store: ConfigStore, rag_engine: RAGEngine) -> APIRouter:
+    """Create router with injected dependencies."""
+    global _config_store, _rag_engine
+    _config_store = config_store
+    _rag_engine = rag_engine
+    return router
 
 
 @router.get("")
 async def get_config():
-    current = GlobalConfig(**config_store.get_all()).model_dump()
-    return config_store.update(current)
+    current = GlobalConfig(**_config_store.get_all()).model_dump()
+    return _config_store.update(current)
 
 
 @router.put("")
 async def update_config(updates: dict):
     # Validate against model
-    current = config_store.get_all()
+    current = _config_store.get_all()
     current.update(updates)
     validated = GlobalConfig(**current).model_dump()
-    return config_store.update(validated)
+    result = _config_store.update(validated)
+
+    # Update RAG engine config if embed settings changed
+    if any(k in updates for k in ['embedEndpoint', 'embedApiKey', 'embedModel']):
+        cfg = GlobalConfig(**result)
+        _rag_engine.set_config(cfg)
+
+    return result
 
 
 @router.post("/test_llm")
 async def test_llm():
-    config = GlobalConfig(**config_store.get_all())
+    config = GlobalConfig(**_config_store.get_all())
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(config.llmEndpoint, timeout=5.0)
@@ -42,7 +59,7 @@ async def test_llm():
 
 @router.post("/test_tts")
 async def test_tts():
-    config = GlobalConfig(**config_store.get_all())
+    config = GlobalConfig(**_config_store.get_all())
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(config.ttsEndpoint, timeout=5.0)
@@ -53,10 +70,10 @@ async def test_tts():
 
 @router.post("/test_asr")
 async def test_asr():
-    config = GlobalConfig(**config_store.get_all())
+    config = GlobalConfig(**_config_store.get_all())
     if not config.asrEndpoint.startswith("ws"):
         return {"status": "error", "message": "Invalid ASR endpoint (must be ws/wss)"}
-    
+
     try:
         host_port = config.asrEndpoint.replace("ws://", "").replace("wss://", "").split("/")[0]
         if ":" in host_port:
@@ -65,7 +82,7 @@ async def test_asr():
         else:
             host = host_port
             port = 80
-            
+
         loop = asyncio.get_event_loop()
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setblocking(False)
@@ -78,7 +95,7 @@ async def test_asr():
 
 @router.post("/test_embed")
 async def test_embed():
-    config = GlobalConfig(**config_store.get_all())
+    config = GlobalConfig(**_config_store.get_all())
     try:
         if config.embedEndpoint:
             async with httpx.AsyncClient() as client:

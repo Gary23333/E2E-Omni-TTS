@@ -51,7 +51,7 @@ export function useWebSocket() {
           break;
 
         case 'tts_chunk':
-          // Audio chunks handled by binary frame callback
+          // Audio chunks handled by binary handler
           break;
 
         case 'tts_done':
@@ -135,5 +135,6 @@ export function useWebSocket() {
     sendAudioChunk,
     sendAudioEnd,
     isConnected: () => clientRef.current?.connected ?? false,
+    onBinary: (handler: (data: ArrayBuffer) => void) => clientRef.current?.onBinary(handler),
   };
 }
