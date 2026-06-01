@@ -8,7 +8,6 @@
 [![VoxCPM2](https://img.shields.io/badge/TTS-VoxCPM2_Streaming-FF6B6B?logo=openai&logoColor=white)](https://github.com/OpenBMB/VoxCPM)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/Frontend-React_19-61DAFB?logo=react&logoColor=white)](https://react.dev)
-[![Vibe Coding](https://img.shields.io/badge/Built_with-Vibe_Coding-8A2BE2)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 <p align="center">
@@ -41,8 +40,6 @@ OmniVoice: 🎙️ 语音 ───────────────→ 🧠 
 - **面壁智能 VoxCPM2** 以流式 chunk 输出 48kHz 高保真语音，LLM 刚吐 token 你就能听到声音
 - **Agent 工具链**让语音助手能真正"动手"完成任务，而不只是聊天
 
-这是一个 **Vibe Coding 实验项目**。核心架构与绝大多数功能由 AI Agent 辅助生成，人类负责审校、调试与体验打磨。代码或许不够"教科书级"，但每一个 feature 都经过真实场景验证。**欢迎懂代码的朋友一起优化、重构、提 PR！**
-
 ---
 
 ## 🚀 端到端能力全景
@@ -67,8 +64,6 @@ OmniVoice: 🎙️ 语音 ───────────────→ 🧠 
 | **48kHz 高保真** | 配合前端 Web Audio API 的 AudioContext 时间轴预排队播放，实现跨 chunk 无缝衔接 |
 | **零样本音色控制** | 通过 voice descriptor（如 `(A warm young woman)`）即时切换说话风格，无需微调 |
 | **30+ 语言原生支持** | 非拼接式多语言，跨语言音色一致 |
-
-> **为什么这很重要？** 传统 TTS 必须等 LLM 输出完整回复才能开始合成，用户要干等数秒。VoxCPM2 的流式能力让"边想边说"成为现实——大模型刚想到前半句，你已经听到前半句了。
 
 ### 🔧 Agent 智能路由 + 实时工具调用
 
@@ -235,6 +230,28 @@ npm run dev  # 运行于 http://localhost:5173
 
 ---
 
+## 🔧 技术特性
+
+### 高可用设计
+
+- **自动重试**：LLM 和 TTS 客户端内置指数退避重试机制（默认 2 次）
+- **连接超时**：所有 HTTP/WebSocket 连接均有超时保护
+- **错误恢复**：ASR 服务断连自动重试，LLM 服务不可用时返回友好提示
+
+### 并发安全
+
+- **WebSocket 状态管理**：使用 `asyncio.Lock` 保护共享状态
+- **任务取消**：支持优雅的任务取消和资源清理
+- **内存管理**：自动清理过期的历史对话记录
+
+### 依赖注入
+
+- **全局单例**：RAG 引擎和配置存储通过依赖注入共享
+- **热更新**：配置变更后自动同步到相关模块
+- **模块解耦**：各组件通过接口交互，易于扩展和测试
+
+---
+
 ## 🎯 为什么 Omni + VoxCPM2 是语音助手的未来？
 
 | 维度 | 传统级联语音助手 | OmniVoice (Omni + VoxCPM2) |
@@ -249,35 +266,16 @@ npm run dev  # 运行于 http://localhost:5173
 
 ---
 
-## 🤝 参与贡献
-
-> **这是一个 Vibe Coding 项目。** 大量代码由 AI Agent 在对话中生成，虽然功能完整且经过场景验证，但在工程规范、边界 case 处理、性能优化上还有很大提升空间。
-
-**我们特别欢迎以下方向的贡献：**
-
-- 🔧 **代码重构**：模块解耦、类型注解完善、异常处理增强
-- ⚡ **性能优化**：WebSocket 连接池、TTS 切片算法、前端音频缓冲策略
-- 🧪 **测试覆盖**：当前测试脚本较粗糙，需要单元测试与集成测试
-- 🌍 **多语言支持**：VoxCPM2 本身支持 30 语言，但前端与提示词目前以中文为主
-- 🎨 **UI/UX 打磨**：更多的动画、响应式适配、无障碍支持
-- 📖 **文档完善**：API 文档、部署指南、架构设计说明
-
-**提交 PR 前请确保：**
-1. 代码通过本地运行验证
-2. 不引入新的硬编码敏感信息（API Key、个人路径等）
-3. 遵循现有代码风格
-
----
-
 ## 📂 项目结构
 
 ```
-voice-cs-demo/
+OmniVoice/
 ├── backend/
 │   ├── core/
 │   │   ├── agent_manager.py      # 多 Agent 编排 / 工具调用循环 / Omni fallback
-│   │   ├── llm_client.py         # OpenAI-compatible 客户端（MiMo Omni 自动兼容）
-│   │   ├── tts_client.py         # VoxCPM2 流式 TTS 客户端 + 噪音混音
+│   │   ├── llm_client.py         # OpenAI-compatible 客户端（带重试机制）
+│   │   ├── tts_client.py         # VoxCPM2 流式 TTS 客户端（带重试机制）
+│   │   ├── asr_client.py         # FunASR WebSocket 客户端（实时语音识别）
 │   │   ├── rag_engine.py         # FAISS + 本地/远程 Embedding 双模
 │   │   ├── noise_manager.py      # 背景音频实时合成
 │   │   └── skill_executor.py     # HTTP / Script 工具执行器
@@ -300,29 +298,44 @@ voice-cs-demo/
 │   │   ├── hooks/
 │   │   │   ├── useAudioRecorder.ts   # Web Audio API 原生 PCM 采集
 │   │   │   ├── useAudioPlayer.ts     # PCM 队列播放 / 打断 / 字节对齐
-│   │   │   └── useWebSocket.ts       # WS 事件处理
-│   │   └── stores/               # Zustand 状态管理
+│   │   │   └── useWebSocket.ts       # WS 事件处理（支持二进制消息）
+│   │   ├── stores/               # Zustand 状态管理
+│   │   └── types/                # TypeScript 类型定义
 │   └── package.json
-└── start.command                 # macOS 一键启动脚本
+├── LICENSE                         # MIT 许可证
+├── .editorconfig                   # 代码风格配置
+├── .gitignore                      # Git 忽略规则
+└── start.command                   # macOS 一键启动脚本
 ```
 
 ---
 
-## 🧠 Vibe Coding 手记
+## 🧪 测试连接
 
-> *"让 AI 写代码，让人类定方向。"*
+启动后，可以在前端 **系统设置** 页面测试各服务连接：
 
-这个项目诞生于一次实验：如果让 AI Agent 从零开始搭建一个**完整的端到端语音助手**——能听懂、能思考、能调用工具、能开口说话——能做到什么程度？
+1. **LLM 服务测试**：验证 LLM API 端点是否可达
+2. **TTS 服务测试**：验证 VoxCPM2 服务是否正常
+3. **ASR 服务测试**：验证 FunASR WebSocket 连接
+4. **Embedding 测试**：验证向量模型服务
 
-答案是：**架构可用，体验可期，工程待打磨。**
+---
 
-- AI 在数小时内完成了 Omni 协议对接、WebSocket 语音流、TTS 流式切片的骨架
-- 人类花了数天调试音频字节对齐、Omni fallback 策略、流式播放的边界 case
-- 最终呈现的效果，是人与 AI 协作的产物
+## 🤝 参与贡献
 
-**OmniVoice 不是一个玩具 Demo，它是一个证明**：当 Omni 多模态大模型遇见端到端流式 TTS，语音助手终于可以从"语音转文字再转语音"的笨重 pipeline，进化成真正"听说一体、能思会干"的智能体。
+**我们特别欢迎以下方向的贡献：**
 
-如果你也是 Vibe Coding 的践行者，欢迎来交流经验，更欢迎来一起把这个项目打磨成 Production Ready 的系统。
+- 🔧 **代码重构**：模块解耦、类型注解完善、异常处理增强
+- ⚡ **性能优化**：WebSocket 连接池、TTS 切片算法、前端音频缓冲策略
+- 🧪 **测试覆盖**：单元测试与集成测试
+- 🌍 **多语言支持**：VoxCPM2 本身支持 30 语言，但前端与提示词目前以中文为主
+- 🎨 **UI/UX 打磨**：更多的动画、响应式适配、无障碍支持
+- 📖 **文档完善**：API 文档、部署指南、架构设计说明
+
+**提交 PR 前请确保：**
+1. 代码通过本地运行验证
+2. 不引入新的硬编码敏感信息（API Key、个人路径等）
+3. 遵循现有代码风格（参考 `.editorconfig`）
 
 ---
 
@@ -334,6 +347,6 @@ voice-cs-demo/
 
 <div align="center">
 
-**Powered by <a href="https://github.com/OpenBMB/VoxCPM">面壁智能 VoxCPM2</a> · Built with Vibe Coding**
+**Powered by <a href="https://github.com/OpenBMB/VoxCPM">面壁智能 VoxCPM2</a> · Built with ❤️**
 
 </div>
