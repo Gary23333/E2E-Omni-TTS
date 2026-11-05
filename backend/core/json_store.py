@@ -52,6 +52,19 @@ class JsonStore(Generic[T]):
             self._write(data)
         return item
 
+    def save(self, item: T) -> T:
+        """Create or replace one model under the same store lock."""
+        with self._lock:
+            data = self._read()
+            for index, existing in enumerate(data):
+                if existing.get("id") == item.id:
+                    data[index] = item.model_dump()
+                    break
+            else:
+                data.append(item.model_dump())
+            self._write(data)
+        return item
+
     def update(self, item_id: str, updates: dict) -> Optional[T]:
         with self._lock:
             data = self._read()

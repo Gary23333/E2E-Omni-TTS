@@ -50,10 +50,6 @@ export function useWebSocket() {
           store.setLLMPartial('');
           break;
 
-        case 'tts_chunk':
-          // Audio chunks handled by binary frame callback
-          break;
-
         case 'tts_done':
           store.setTTSPlaying(false);
           break;
@@ -139,5 +135,6 @@ export function useWebSocket() {
     sendAudioChunk,
     sendAudioEnd,
     isConnected: () => clientRef.current?.connected ?? false,
+    onBinary: (handler: (data: ArrayBuffer) => void) => clientRef.current?.onBinary(handler),
   };
 }

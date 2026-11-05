@@ -119,11 +119,7 @@ class SkillExecutor:
         self._skills = {s.name: s for s in skills if s.enabled}
 
     def get_tool_definitions(self, enabled_tool_ids: list[str] | None = None) -> str:
-        """Format enabled skills as tool definitions for LLM prompt.
-
-        Args:
-            enabled_tool_ids: If provided, only include skills whose IDs are in this list.
-        """
+        """Format enabled skills as tool definitions for LLM prompt."""
         lines = []
         for name, skill in self._skills.items():
             if enabled_tool_ids is not None and skill.id not in enabled_tool_ids:
@@ -133,10 +129,12 @@ class SkillExecutor:
             lines.append(f"- {name}({param_str}): {skill.description}")
         return "\n".join(lines) if lines else "无可用工具"
 
-    def get_tools_json_schema(self) -> list[dict]:
+    def get_tools_json_schema(self, enabled_tool_ids: list[str] | None = None) -> list[dict]:
         """Return OpenAI function-calling compatible tool definitions."""
         tools = []
         for name, skill in self._skills.items():
+            if enabled_tool_ids is not None and skill.id not in enabled_tool_ids:
+                continue
             tools.append({
                 "type": "function",
                 "function": {
@@ -148,13 +146,7 @@ class SkillExecutor:
         return tools
 
     def parse_tool_call(self, llm_output: str):  # returns tuple[str, dict] or None
-        """Try to extract a tool call from LLM output.
-
-        Supports two formats:
-        1. OpenAI function-calling streaming format (via __tool_call__ marker)
-        2. Legacy JSON format: {"tool_call": {"name": "...", "arguments": {...}}}
-        """
-        # 1. Try OpenAI function-calling format (marked by __tool_call__)
+        """Try to extract a tool call from LLM output."""
         decoder = json.JSONDecoder()
         candidates = [llm_output.strip()]
         candidates.extend(llm_output[i:] for i, ch in enumerate(llm_output) if ch == "{")
@@ -164,34 +156,30 @@ class SkillExecutor:
                 data, _ = decoder.raw_decode(candidate.lstrip())
             except json.JSONDecodeError:
                 continue
-            if isinstance(data, dict):
-                # OpenAI streaming tool_call format
-                if "__tool_call__" in data:
-                    tc = data["__tool_call__"]
-                    if isinstance(tc, dict):
-                        name = tc.get("name", "")
-                        args = tc.get("arguments", "")
-                        # arguments may be a JSON string in streaming mode
-                        if isinstance(args, str):
-                            try:
-                                args = json.loads(args)
-                            except json.JSONDecodeError:
-                                args = {}
-                        return name, args if isinstance(args, dict) else {}
-
-                # Legacy format
-                if "tool_call" in data:
-                    tc = data["tool_call"]
-                    if isinstance(tc, dict):
-                        return tc.get("name", ""), tc.get("arguments", {})
+            if not isinstance(data, dict):
+                continue
+            tc = data.get("__tool_call__", data.get("tool_call"))
+            if not isinstance(tc, dict):
+                continue
+            name = tc.get("name")
+            arguments = tc.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(name, str) and name and isinstance(arguments, dict):
+                return name, arguments
 
         return None
 
-    async def execute(self, tool_name: str, arguments: dict) -> str:
+    async def execute(self, tool_name: str, arguments: dict, enabled_tool_ids: list[str] | None = None) -> str:
         """Execute a skill and return the result."""
         skill = self._skills.get(tool_name)
         if not skill:
             return f"未知工具: {tool_name}"
+        if enabled_tool_ids is not None and skill.id not in enabled_tool_ids:
+            return f"当前客服未获授权使用工具: {tool_name}"
 
         if skill.type == SkillType.BUILTIN:
             func = BUILTIN_SKILLS.get(tool_name)

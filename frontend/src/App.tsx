@@ -14,10 +14,10 @@ function AppLayout() {
     <div className="h-screen flex overflow-hidden relative bg-[#020617]">
       {/* Immersive background layer */}
       <div className="bg-mesh" />
-      
+
       {/* Sidebar navigation */}
       <Sidebar />
-      
+
       {/* Main interaction stage */}
       <main className="flex-1 overflow-hidden relative z-10 py-6 pr-6">
         <div className="h-full glass-panel rounded-[3rem] overflow-hidden shadow-2xl transition-all duration-700">
@@ -28,6 +28,7 @@ function AppLayout() {
             <Route path="/skills" element={<SkillManager />} />
             <Route path="/settings" element={<SettingsPanel />} />
             <Route path="/" element={<Navigate to="/call" replace />} />
+            <Route path="*" element={<Navigate to="/call" replace />} />
           </Routes>
         </div>
       </main>

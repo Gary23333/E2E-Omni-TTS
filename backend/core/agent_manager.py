@@ -5,9 +5,10 @@ from typing import AsyncGenerator, Optional, Callable, Awaitable
 
 from schemas.models import Agent, AgentGroup, GlobalConfig
 from core.llm_client import LLMClient
-from core.tts_client import TTSClient, mix_noise
+from core.tts_client import TTSClient
 from core.skill_executor import SkillExecutor
 from core.rag_engine import RAGEngine
+from core.noise_manager import noise_manager
 from prompts.templates import (
     ROUTER_PROMPT, AGENT_SYSTEM_PROMPT, RAG_CONTEXT_TEMPLATE,
     TOOL_CALL_TEMPLATE, TOOL_RESULT_TEMPLATE, WAITING_MESSAGES,
@@ -41,6 +42,36 @@ class AgentManager:
         self._agent_group = group
         self._active_agent = active_agent
         self._history = []
+
+    @property
+    def active_agent(self) -> Optional[Agent]:
+        """Get the currently active agent."""
+        return self._active_agent
+
+    @active_agent.setter
+    def active_agent(self, agent: Agent):
+        """Set the active agent."""
+        self._active_agent = agent
+
+    @property
+    def agents(self) -> list[Agent]:
+        """Get all agents in the current context."""
+        return self._agents
+
+    @property
+    def agent_group(self) -> Optional[AgentGroup]:
+        """Get the current agent group."""
+        return self._agent_group
+
+    def get_agent_by_id(self, agent_id: str) -> Optional[Agent]:
+        """Find an agent by ID."""
+        return self._find_agent(agent_id)
+
+    def get_default_agent(self) -> Optional[Agent]:
+        """Get the default agent from the current context."""
+        if self._active_agent:
+            return self._active_agent
+        return self._agents[0] if self._agents else None
 
     def _find_agent(self, agent_id: str) -> Optional[Agent]:
         for a in self._agents:
@@ -103,7 +134,7 @@ class AgentManager:
 
         # Tools section
         tools_section = ""
-        tool_defs = self.skill_executor.get_tool_definitions(agent.enabledToolIds or None)
+        tool_defs = self.skill_executor.get_tool_definitions(agent.enabledToolIds)
         if tool_defs and tool_defs != "无可用工具":
             tools_section = TOOL_CALL_TEMPLATE.format(tool_definitions=tool_defs)
 
@@ -143,6 +174,8 @@ class AgentManager:
             logger.info(f"LLM Chat Round {round_idx+1}")
             # Stream LLM response
             full_response = ""
+            streamed_response = ""
+            defer_output = False
             try:
                 stream = await self.llm.chat(
                     messages=messages,
@@ -154,8 +187,15 @@ class AgentManager:
 
                 async for token in stream:
                     full_response += token
-                    if on_token:
-                        await on_token(token)
+                    # Hold possible control syntax until it can be parsed. Tool
+                    # JSON and handoff markers must never reach the UI or TTS.
+                    if on_token and not defer_output:
+                        control_positions = [token.find(ch) for ch in "{[`" if ch in token]
+                        visible = token[:min(control_positions)] if control_positions else token
+                        if visible:
+                            await on_token(visible)
+                            streamed_response += visible
+                        defer_output = bool(control_positions)
 
                 logger.info(f"LLM full response received: {full_response}")
             except Exception as e:
@@ -177,7 +217,7 @@ class AgentManager:
                     await on_waiting(WAITING_MESSAGES["tool_call"])
 
                 # Execute tool
-                result = await self.skill_executor.execute(tool_name, arguments)
+                result = await self.skill_executor.execute(tool_name, arguments, agent.enabledToolIds)
 
                 if on_tool_end:
                     await on_tool_end(tool_name)
@@ -189,12 +229,25 @@ class AgentManager:
                 )})
                 continue
 
+            # Do not speak malformed/incomplete tool instructions.
+            if '"tool_call"' in full_response or '"__tool_call__"' in full_response:
+                return "抱歉，工具请求格式不正确，请稍后再试。", None
+
+            # Keep the deferred suffix before trimming the returned response.
+            # Already-streamed whitespace must not shift the suffix boundary.
+            unstreamed_response = full_response[len(streamed_response):]
+
             # Check for handoff
             handoff_match = re.search(r'\[HANDOFF:(\w+)\]', full_response)
             handoff_target = None
             if handoff_match:
                 handoff_target = handoff_match.group(1)
                 full_response = re.sub(r'\[HANDOFF:\w+\]', '', full_response).strip()
+
+            if on_token:
+                unstreamed_response = re.sub(r'\[HANDOFF:\w+\]', '', unstreamed_response)
+                if unstreamed_response:
+                    await on_token(unstreamed_response)
 
             # Save to history
             self._history.append({"role": "user", "content": user_message})
@@ -220,15 +273,15 @@ class AgentManager:
         Process audio input directly for Omni mode.
         """
         self._active_agent = agent
-        
+
         system_prompt = AGENT_SYSTEM_PROMPT.format(
             name=agent.name,
             role=agent.role,
             system_prompt=agent.systemPrompt,
-            rag_context="", 
+            rag_context="",
             tools_section="",
         )
-        
+
         messages = [
             {"role": "system", "content": system_prompt},
             *self._history,
@@ -267,7 +320,7 @@ class AgentManager:
         # Save to history
         self._history.append({"role": "user", "content": text})
         self._history.append({"role": "assistant", "content": full_response})
-        
+
         return full_response, None
 
     async def synthesize_speech(
@@ -276,10 +329,11 @@ class AgentManager:
         voice_descriptor: str = "",
         noise_type: str = "none",
         noise_volume: float = 0.0,
+        custom_noise_file: Optional[str] = None,
     ) -> AsyncGenerator[bytes, None]:
         """Synthesize speech with optional voice descriptor and noise mixing."""
         # Prepend voice descriptor for VoxCPM2 persona
         tts_input = f"{voice_descriptor}{text}" if voice_descriptor else text
 
         async for chunk in self.tts.synthesize_streaming(tts_input):
-            yield mix_noise(chunk, noise_type, noise_volume)
+            yield noise_manager.mix(chunk, noise_type, noise_volume, custom_noise_file)

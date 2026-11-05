@@ -54,6 +54,7 @@ export class VoiceWSClient {
 
       this.ws.onmessage = (event) => {
         if (typeof event.data === 'string') {
+          // Text message - JSON
           try {
             const msg = JSON.parse(event.data) as WSMessage;
             this.handlers.forEach(h => h(msg));
@@ -61,6 +62,7 @@ export class VoiceWSClient {
             console.warn('Invalid WS message:', event.data);
           }
         } else if (event.data instanceof ArrayBuffer) {
+          // Binary message - audio data
           this.binaryHandlers.forEach(h => h(event.data as ArrayBuffer));
         }
       };

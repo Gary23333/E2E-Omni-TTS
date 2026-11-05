@@ -5,7 +5,7 @@ import asyncio
 import struct
 import re
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Union, List, Dict, Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -27,6 +27,19 @@ STRONG_TTS_BREAKS = "。！？!?；;\n"
 SOFT_TTS_BREAKS = "，,、：:"
 MIN_TTS_SEGMENT_CHARS = 12
 MAX_TTS_SEGMENT_CHARS = 90
+
+# These will be set by create_router()
+_config_store: ConfigStore = None
+_rag_engine: RAGEngine = None
+
+
+def create_router(config_store: ConfigStore, rag_engine: RAGEngine) -> APIRouter:
+    """Create router with injected dependencies."""
+    global _config_store, _rag_engine
+    _config_store = config_store
+    _rag_engine = rag_engine
+    return router
+
 
 def _strip_emoji(text: str) -> str:
     chars: list[str] = []
@@ -90,25 +103,20 @@ group_store = JsonStore("agent_groups.json", AgentGroup)
 skill_store = JsonStore("skills.json", Skill)
 session_store = JsonStore("sessions.json", Session)
 
-DEFAULTS = GlobalConfig().model_dump()
-config_store = ConfigStore("global_config.json", DEFAULTS)
-
-rag_engine = RAGEngine()
-
 
 def _build_managers():
     """Build LLM, TTS, ASR, SkillExecutor, AgentManager from current config."""
-    cfg = GlobalConfig(**config_store.get_all())
+    cfg = GlobalConfig(**_config_store.get_all())
     llm = LLMClient(cfg.llmEndpoint, cfg.llmApiKey, cfg.llmModel)
     tts = TTSClient(cfg.ttsEndpoint, cfg.ttsModel, cfg.ttsResponseFormat)
     asr = ASRClient(cfg.asrEndpoint)
     skills = [s for s in JsonStore("skills.json", Skill).list_all() if s.enabled]
     executor = SkillExecutor(skills if skills else DEFAULT_SKILLS)
-    
+
     # Initialize RAG engine with current config
-    rag_engine.set_config(cfg)
-    
-    manager = AgentManager(llm, tts, executor, rag_engine)
+    _rag_engine.set_config(cfg)
+
+    manager = AgentManager(llm, tts, executor, _rag_engine)
     return llm, tts, asr, executor, manager, cfg
 
 
@@ -123,22 +131,31 @@ async def voice_ws(ws: WebSocket, session_id: str):
     transcript: List[Dict[str, Any]] = []
     audio_buffer: List[bytes] = []
     send_lock = asyncio.Lock()
+    response_lock = asyncio.Lock()
     active_response: Dict[str, Any] = {"task": None, "bridge": None}
     current_session: Optional[Session] = None
 
     def _now() -> str:
-        return datetime.now().isoformat()
+        return datetime.now(timezone.utc).isoformat()
 
     def _save_session():
-        if current_session:
-            current_session.transcript = [
-                TranscriptEntry(**{k: v for k, v in entry.items() if k in TranscriptEntry.model_fields})
-                for entry in transcript
-            ]
-            try:
-                session_store.save(current_session)
-            except Exception as e:
-                logger.warning(f"Failed to save session: {e}")
+        if current_session is None:
+            return
+        try:
+            current_session.transcript = [TranscriptEntry(**entry) for entry in transcript]
+            session_store.save(current_session)
+        except Exception:
+            logger.exception("Failed to save voice session %s", session_id)
+
+    def _record(entry: Dict[str, Any]):
+        transcript.append({**entry, "timestamp": _now()})
+        _save_session()
+
+    def _end_session():
+        if current_session is not None and current_session.status != "ended":
+            current_session.status = "ended"
+            current_session.endedAt = _now()
+            _save_session()
 
     async def send_json(msg: Dict[str, Any]):
         try:
@@ -155,19 +172,12 @@ async def voice_ws(ws: WebSocket, session_id: str):
             pass
 
     class StreamingTTSBridge:
-        """Queues LLM text fragments and speaks them through streaming TTS.
-
-        Uses aggressive early-flushing: if buffer exceeds MIN_EAGER_FLUSH_CHARS
-        and no strong break is found within EAGER_FLUSH_WINDOW, we flush at the
-        last soft break to start TTS as early as possible.
-        """
-
-        MIN_EAGER_FLUSH_CHARS = 24
-        EAGER_FLUSH_WINDOW = 48
+        """Queues LLM text fragments and speaks them through streaming TTS."""
 
         def __init__(self, agent: Agent):
             self.agent = agent
             self.buffer = ""
+            self.has_content = False
             self.queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
             self.cancelled = False
             self.task = asyncio.create_task(self._run())
@@ -175,6 +185,7 @@ async def voice_ws(ws: WebSocket, session_id: str):
         async def feed(self, token: str):
             if not token or self.cancelled:
                 return
+            self.has_content = True
             self.buffer += token
             self.buffer = sanitize_tts_text(self.buffer)
             await self._flush_ready_segments()
@@ -210,24 +221,14 @@ async def voice_ws(ws: WebSocket, session_id: str):
             if stripped != self.buffer:
                 self.buffer = stripped
 
-            # 1. Strong break with minimum length -> ideal segment
             strong_idx = self._first_break_index(STRONG_TTS_BREAKS)
             if strong_idx >= 0 and strong_idx + 1 >= MIN_TTS_SEGMENT_CHARS:
                 return self._take(strong_idx + 1)
 
-            # 2. Soft break with relaxed minimum -> good enough
             soft_idx = self._last_break_index(SOFT_TTS_BREAKS)
             if soft_idx >= 0 and soft_idx + 1 >= 20:
                 return self._take(soft_idx + 1)
 
-            # 3. Eager flush: if we have enough chars and a soft break within window,
-            #    flush early to reduce TTS latency
-            if len(self.buffer) >= self.MIN_EAGER_FLUSH_CHARS:
-                eager_soft = self._last_break_index_in_window(SOFT_TTS_BREAKS, self.EAGER_FLUSH_WINDOW)
-                if eager_soft >= self.MIN_EAGER_FLUSH_CHARS - 4:
-                    return self._take(eager_soft + 1)
-
-            # 4. Hard cap -> force split
             if len(self.buffer) >= MAX_TTS_SEGMENT_CHARS:
                 return self._take(MAX_TTS_SEGMENT_CHARS)
 
@@ -239,12 +240,6 @@ async def voice_ws(ws: WebSocket, session_id: str):
 
         def _last_break_index(self, chars: str) -> int:
             indexes = [self.buffer.rfind(ch) for ch in chars if self.buffer.rfind(ch) >= 0]
-            return max(indexes) if indexes else -1
-
-        def _last_break_index_in_window(self, chars: str, window: int) -> int:
-            """Find the last break char within the first `window` characters."""
-            search_area = self.buffer[:window]
-            indexes = [search_area.rfind(ch) for ch in chars if search_area.rfind(ch) >= 0]
             return max(indexes) if indexes else -1
 
         def _take(self, end: int) -> str:
@@ -266,14 +261,9 @@ async def voice_ws(ws: WebSocket, session_id: str):
                     self.agent.voiceDescriptor or cfg.ttsVoiceDescriptor,
                     cfg.noiseType.value,
                     cfg.noiseVolume,
+                    cfg.customNoiseFile,
                 ):
-                    mixed_chunk = noise_manager.mix(
-                        chunk,
-                        cfg.noiseType.value,
-                        cfg.noiseVolume,
-                        cfg.customNoiseFile,
-                    )
-                    await send_audio_chunk(mixed_chunk)
+                    await send_audio_chunk(chunk)
 
     async def speak_text(text: str, agent: Agent):
         text = sanitize_tts_text(text)
@@ -284,9 +274,9 @@ async def voice_ws(ws: WebSocket, session_id: str):
             agent.voiceDescriptor or cfg.ttsVoiceDescriptor,
             cfg.noiseType.value,
             cfg.noiseVolume,
+            cfg.customNoiseFile,
         ):
-            mixed_chunk = noise_manager.mix(chunk, cfg.noiseType.value, cfg.noiseVolume, cfg.customNoiseFile)
-            await send_audio_chunk(mixed_chunk)
+            await send_audio_chunk(chunk)
 
     async def handle_processed_response(
         text: str,
@@ -298,23 +288,24 @@ async def voice_ws(ws: WebSocket, session_id: str):
 
         # Handle handoff
         if handoff:
-            target = next((a for a in manager._agents if a.id == handoff), None)
+            target = manager.get_agent_by_id(handoff)
             if target:
                 handoff_msg = f"正在为您转接至{target.name}，请稍候..."
                 await send_json({"type": "waiting_start", "message": handoff_msg})
-                transcript.append({"role": "system", "text": handoff_msg, "timestamp": _now()})
+                _record({"role": "system", "text": handoff_msg})
                 await send_json({"type": "agent_switch", "agentId": target.id, "agentName": target.name})
                 await send_json({"type": "waiting_end"})
-                manager._active_agent = target
+                manager.active_agent = target
                 if current_session:
                     current_session.activeAgentId = target.id
 
         # TTS
-        transcript.append({"role": "agent", "text": text, "agentName": agent.name, "timestamp": _now()})
+        _record({"role": "agent", "text": text, "agentName": agent.name})
         await send_json({"type": "transcript_entry", "role": "agent", "text": text, "agentName": agent.name})
-        _save_session()
 
         if tts_bridge:
+            if not tts_bridge.has_content:
+                await tts_bridge.feed(text)
             await tts_bridge.finish()
         else:
             await speak_text(text, agent)
@@ -325,19 +316,30 @@ async def voice_ws(ws: WebSocket, session_id: str):
         await tts_bridge.feed(token)
 
     async def cancel_active_response(send_stop: bool = True):
-        bridge = active_response.get("bridge")
-        if bridge:
-            await bridge.cancel()
-            active_response["bridge"] = None
+        async with response_lock:
+            bridge = active_response.get("bridge")
+            task = active_response.get("task")
 
-        task = active_response.get("task")
+            # Clear references first to prevent double cancellation
+            active_response["bridge"] = None
+            active_response["task"] = None
+
+        # Cancel bridge outside lock to avoid deadlock
+        if bridge:
+            try:
+                await bridge.cancel()
+            except Exception as e:
+                logger.warning(f"Error cancelling bridge: {e}")
+
+        # Cancel task outside lock
         if task and not task.done():
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-        active_response["task"] = None
+            except Exception as e:
+                logger.warning(f"Error cancelling task: {e}")
 
         if send_stop:
             await send_json({"type": "tts_stop"})
@@ -345,7 +347,8 @@ async def voice_ws(ws: WebSocket, session_id: str):
 
     async def run_text_response(text: str, active: Agent):
         bridge = StreamingTTSBridge(active)
-        active_response["bridge"] = bridge
+        async with response_lock:
+            active_response["bridge"] = bridge
         try:
             response, handoff = await manager.process_message(
                 text, active,
@@ -359,8 +362,9 @@ async def voice_ws(ws: WebSocket, session_id: str):
             await bridge.cancel()
             raise
         finally:
-            if active_response.get("bridge") is bridge:
-                active_response["bridge"] = None
+            async with response_lock:
+                if active_response.get("bridge") is bridge:
+                    active_response["bridge"] = None
             if not bridge.task.done():
                 await bridge.cancel()
 
@@ -375,11 +379,12 @@ async def voice_ws(ws: WebSocket, session_id: str):
             logger.info(f"Omni ASR identified: {text}")
 
             if text:
-                transcript.append({"role": "user", "text": text})
+                _record({"role": "user", "text": text})
                 await send_json({"type": "transcript_entry", "role": "user", "text": text})
 
             bridge = StreamingTTSBridge(active)
-            active_response["bridge"] = bridge
+            async with response_lock:
+                active_response["bridge"] = bridge
             try:
                 response, handoff = await manager.process_voice(
                     text if text else "用户语音输入", audio_b64, active,
@@ -388,8 +393,9 @@ async def voice_ws(ws: WebSocket, session_id: str):
                 await send_json({"type": "waiting_end"})
                 await handle_processed_response(response, handoff, active, bridge)
             finally:
-                if active_response.get("bridge") is bridge:
-                    active_response["bridge"] = None
+                async with response_lock:
+                    if active_response.get("bridge") is bridge:
+                        active_response["bridge"] = None
                 if not bridge.task.done():
                     await bridge.cancel()
         except asyncio.CancelledError:
@@ -406,7 +412,7 @@ async def voice_ws(ws: WebSocket, session_id: str):
                 await send_json({"type": "error", "message": "无法识别语音"})
                 return
 
-            transcript.append({"role": "user", "text": text})
+            _record({"role": "user", "text": text})
             await send_json({"type": "transcript_entry", "role": "user", "text": text})
 
             await run_text_response(text, active)
@@ -417,6 +423,8 @@ async def voice_ws(ws: WebSocket, session_id: str):
     try:
         while True:
             raw = await ws.receive()
+            if raw.get("type") == "websocket.disconnect":
+                break
 
             if raw.get("type") == "websocket.receive":
                 # ── Binary frame: audio data ──
@@ -431,6 +439,9 @@ async def voice_ws(ws: WebSocket, session_id: str):
 
                     # ── Start call ──
                     if msg_type == "start_call":
+                        if current_session is not None:
+                            await send_json({"type": "error", "message": "通话已经开始"})
+                            continue
                         scenario = msg.get("scenario", "inbound")
                         group_id = msg.get("agentGroupId", "")
 
@@ -444,7 +455,7 @@ async def voice_ws(ws: WebSocket, session_id: str):
 
                         if not agents:
                             agents = [a for a in agent_store.list_all() if a.enabled]
-                        
+
                         if not agents:
                             await send_json({"type": "error", "message": "没有可用的客服"})
                             continue
@@ -456,12 +467,10 @@ async def voice_ws(ws: WebSocket, session_id: str):
                                 default_agent = found
 
                         manager.set_context(agents, group, default_agent)
-
-                        # Initialize session
                         current_session = Session(
                             id=session_id,
                             scenario=scenario,
-                            agentGroupId=group_id,
+                            agentGroupId=group.id if group else "",
                             activeAgentId=default_agent.id,
                             startedAt=_now(),
                             status="active",
@@ -478,7 +487,7 @@ async def voice_ws(ws: WebSocket, session_id: str):
 
                         if scenario == "inbound":
                             greeting = f"您好，我是{default_agent.name}，很高兴为您服务。请问有什么可以帮您？"
-                            transcript.append({"role": "agent", "text": greeting, "agentName": default_agent.name, "timestamp": _now()})
+                            _record({"role": "agent", "text": greeting, "agentName": default_agent.name})
                             await send_json({"type": "transcript_entry", "role": "agent", "text": greeting, "agentName": default_agent.name})
 
                             await speak_text(greeting, default_agent)
@@ -496,11 +505,10 @@ async def voice_ws(ws: WebSocket, session_id: str):
                         text = msg.get("text", "").strip()
                         if not text: continue
 
-                        transcript.append({"role": "user", "text": text, "timestamp": _now()})
+                        _record({"role": "user", "text": text})
                         await send_json({"type": "transcript_entry", "role": "user", "text": text})
-                        _save_session()
 
-                        active = manager._active_agent or (manager._agents[0] if manager._agents else None)
+                        active = manager.get_default_agent()
                         if not active:
                             await send_json({"type": "error", "message": "无活跃客服"})
                             continue
@@ -512,10 +520,10 @@ async def voice_ws(ws: WebSocket, session_id: str):
                     # ── Audio end ──
                     elif msg_type == "audio_end":
                         if not audio_buffer: continue
-                        
+
                         full_pcm = b"".join(audio_buffer)
                         audio_buffer = []
-                        active = manager._active_agent or (manager._agents[0] if manager._agents else None)
+                        active = manager.get_default_agent()
                         if not active: continue
 
                         if cfg.llmMode == LLMMode.OMNI:
@@ -534,12 +542,8 @@ async def voice_ws(ws: WebSocket, session_id: str):
                     # ── End call ──
                     elif msg_type == "end_call":
                         await cancel_active_response(send_stop=True)
-                        if current_session:
-                            current_session.status = "ended"
-                            current_session.endedAt = _now()
-                            _save_session()
+                        _end_session()
                         await send_json({"type": "call_ended", "sessionId": session_id})
-                        transcript = []
                         break
 
     except WebSocketDisconnect:
@@ -550,3 +554,17 @@ async def voice_ws(ws: WebSocket, session_id: str):
             await send_json({"type": "error", "message": str(e)})
         except Exception:
             pass
+    finally:
+        # Cleanup: cancel any active response tasks
+        try:
+            await cancel_active_response(send_stop=False)
+        except Exception as e:
+            logger.warning(f"Error during cleanup: {e}")
+
+        _end_session()
+
+        # Clear audio buffer
+        audio_buffer.clear()
+        transcript.clear()
+
+        logger.info(f"Voice WS session {session_id} cleaned up")

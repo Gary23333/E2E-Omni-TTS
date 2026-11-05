@@ -70,7 +70,7 @@ export function Sidebar() {
                   <div className={`relative z-10 transition-all duration-300 ${isActive ? 'scale-110 text-primary-400' : 'group-hover:scale-110 group-hover:text-slate-200'}`}>
                     <Icon size={20} strokeWidth={isActive ? 2.5 : 2} />
                   </div>
-                  
+
                   <span className={`relative z-10 font-semibold tracking-wide transition-colors duration-300 ${isActive ? 'text-white' : 'group-hover:text-slate-200'}`}>
                     {item.label}
                   </span>
@@ -95,9 +95,9 @@ export function Sidebar() {
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-tighter">System Online</span>
             </div>
-            <span className="text-[10px] text-white/30 font-mono">v0.4.1</span>
+            <span className="text-[10px] text-white/30 font-mono">v0.5.0</span>
           </div>
-          
+
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-xl bg-white/5 border border-white/10">
               <Activity size={16} className="text-primary-400" />

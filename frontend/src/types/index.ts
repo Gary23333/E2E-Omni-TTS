@@ -1,3 +1,5 @@
+// ── Agent ──────────────────────────────────────────────────────────────────
+
 export interface Agent {
   id: string;
   name: string;
@@ -28,30 +30,42 @@ export interface AgentGroup {
   collaborationRules: CollaborationRule[];
 }
 
+// ── Skill ──────────────────────────────────────────────────────────────────
+
+export type SkillType = 'builtin' | 'http' | 'script';
+
+export interface SkillConfig {
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  code?: string;
+}
+
 export interface Skill {
   id: string;
   name: string;
   description: string;
-  type: 'builtin' | 'http' | 'script';
+  type: SkillType;
   enabled: boolean;
   parameters: Record<string, unknown>;
-  config: {
-    url?: string;
-    method?: string;
-    headers?: Record<string, string>;
-    code?: string;
-  };
+  config: SkillConfig;
 }
+
+// ── RAG ────────────────────────────────────────────────────────────────────
+
+export type DocStatus = 'processing' | 'ready' | 'error';
 
 export interface RAGDocument {
   id: string;
   filename: string;
-  status: 'processing' | 'ready' | 'error';
+  status: DocStatus;
   enabled: boolean;
   uploadedAt: string;
   chunkCount: number;
   error?: string;
 }
+
+// ── Config ─────────────────────────────────────────────────────────────────
 
 export type NoiseType = 'none' | 'cafe' | 'office' | 'street' | 'custom';
 export type LLMMode = 'omni' | 'text_asr';
@@ -77,8 +91,12 @@ export interface GlobalConfig {
   waitingMusicEnabled: boolean;
 }
 
+// ── Session / Transcript ───────────────────────────────────────────────────
+
+export type TranscriptRole = 'user' | 'agent' | 'system' | 'tool';
+
 export interface TranscriptEntry {
-  role: 'user' | 'agent' | 'system' | 'tool';
+  role: TranscriptRole;
   text: string;
   agentName?: string;
   agentId?: string;
@@ -90,7 +108,106 @@ export type CallStatus = 'idle' | 'connecting' | 'active' | 'on_hold' | 'ended';
 export type Scenario = 'inbound' | 'outbound';
 export type InputMode = 'voice' | 'text';
 
-export interface WSMessage {
+// ── WebSocket Messages ─────────────────────────────────────────────────────
+
+export interface WSBaseMessage {
   type: string;
-  [key: string]: unknown;
+}
+
+export interface WSCallStarted extends WSBaseMessage {
+  type: 'call_started';
+  sessionId: string;
+  scenario: Scenario;
+  agentId: string;
+  agentName: string;
+}
+
+export interface WSCallEnded extends WSBaseMessage {
+  type: 'call_ended';
+  sessionId: string;
+}
+
+export interface WSAgentSwitch extends WSBaseMessage {
+  type: 'agent_switch';
+  agentId: string;
+  agentName: string;
+}
+
+export interface WSTranscriptEntry extends WSBaseMessage {
+  type: 'transcript_entry';
+  role: TranscriptRole;
+  text: string;
+  agentName?: string;
+}
+
+export interface WSLLMToken extends WSBaseMessage {
+  type: 'llm_token';
+  text: string;
+}
+
+export interface WSLLMDone extends WSBaseMessage {
+  type: 'llm_done';
+}
+
+export interface WSTTSDone extends WSBaseMessage {
+  type: 'tts_done';
+}
+
+export interface WSTTSStop extends WSBaseMessage {
+  type: 'tts_stop';
+}
+
+export interface WSToolCallStart extends WSBaseMessage {
+  type: 'tool_call_start';
+  toolName: string;
+  message: string;
+}
+
+export interface WSToolCallEnd extends WSBaseMessage {
+  type: 'tool_call_end';
+  toolName: string;
+}
+
+export interface WSWaitingStart extends WSBaseMessage {
+  type: 'waiting_start';
+  message: string;
+}
+
+export interface WSWaitingEnd extends WSBaseMessage {
+  type: 'waiting_end';
+}
+
+export interface WSError extends WSBaseMessage {
+  type: 'error';
+  message: string;
+}
+
+export type WSMessage =
+  | WSCallStarted
+  | WSCallEnded
+  | WSAgentSwitch
+  | WSTranscriptEntry
+  | WSLLMToken
+  | WSLLMDone
+  | WSTTSDone
+  | WSTTSStop
+  | WSToolCallStart
+  | WSToolCallEnd
+  | WSWaitingStart
+  | WSWaitingEnd
+  | WSError;
+
+// ── API Responses ──────────────────────────────────────────────────────────
+
+export interface ApiResponse<T> {
+  data: T;
+  status: 'ok' | 'error';
+  message?: string;
+}
+
+export interface TestConnectionResponse {
+  status: 'ok' | 'error';
+  code?: number;
+  message?: string;
+  mode?: string;
 }

@@ -1,173 +1,184 @@
+import asyncio
+import io
 import json
 import logging
-import asyncio
-import base64
-import struct
-from typing import Optional, Callable, Awaitable
+import wave
+from typing import Optional, Callable, Awaitable, List
+from urllib.parse import urlsplit, urlunsplit
+
+import httpx
+import websockets
 
 logger = logging.getLogger(__name__)
 
 
 class ASRClient:
-    """ASR client supporting FunASR WebSocket protocol and HTTP fallback."""
+    """Recognize signed 16-bit little-endian mono PCM.
+
+    ws(s) endpoints use FunASR's WebSocket protocol with raw PCM, not WAV.
+    Explicit http(s) endpoints use a custom multipart API: an ``audio`` WAV
+    file is posted and the response must contain a string ``text`` or ``result``.
+    A bare HTTP origin uses /asr; an explicit path is used unchanged. This is
+    not the OpenAI/Whisper API. Failed WebSockets never fall back to HTTP.
+    """
 
     def __init__(self, endpoint: str = "ws://localhost:10095"):
         self.endpoint = endpoint
-        self._mode = "2pass"  # online, offline, 2pass
+        self._connection = None
+        self._response_timeout = 30.0
 
     async def recognize_stream(
         self,
-        audio_chunks: list[bytes],
+        audio_chunks: List[bytes],
         on_partial: Optional[Callable[[str], Awaitable[None]]] = None,
         on_final: Optional[Callable[[str], Awaitable[None]]] = None,
+        sample_rate: int = 16000,
     ) -> str:
-        """Recognize speech from audio chunks.
+        """Return recognized final text, or an empty string on failure/silence.
 
-        Tries WebSocket (FunASR) first, falls back to HTTP Whisper-style API,
-        then falls back to mock for demo/development.
+        Callbacks are asynchronous. HTTP delivers only a final callback.
+        sample_rate describes the supplied PCM; this client does not resample.
         """
-        if not audio_chunks:
+        if not audio_chunks or not any(audio_chunks):
+            return ""
+        try:
+            if sample_rate <= 0 or sum(map(len, audio_chunks)) % 2:
+                raise ValueError("Expected whole 16-bit PCM samples and a positive sample rate")
+            return await self._recognize_with_retry(
+                audio_chunks, on_partial, on_final, sample_rate
+            )
+        except Exception as exc:
+            logger.error("ASR recognition failed: %s", exc)
             return ""
 
-        full_pcm = b"".join(audio_chunks)
-
-        # Try WebSocket FunASR
-        if self.endpoint.startswith("ws"):
-            try:
-                result = await self._recognize_ws(full_pcm, on_partial, on_final)
-                if result:
-                    return result
-            except Exception as e:
-                logger.warning(f"FunASR WebSocket failed: {e}. Trying HTTP fallback.")
-
-        # Try HTTP ASR API (e.g., Whisper-compatible)
-        try:
-            result = await self._recognize_http(full_pcm)
-            if result:
-                return result
-        except Exception as e:
-            logger.warning(f"HTTP ASR failed: {e}. Using mock fallback.")
-
-        # Mock fallback for demo
-        await asyncio.sleep(0.3)
-        text = "你好，我想咨询业务。"
-        if on_final:
-            await on_final(text)
-        return text
-
-    async def _recognize_ws(
+    async def _recognize_with_retry(
         self,
-        pcm_data: bytes,
-        on_partial: Optional[Callable[[str], Awaitable[None]]] = None,
-        on_final: Optional[Callable[[str], Awaitable[None]]] = None,
+        audio_chunks: List[bytes],
+        on_partial: Optional[Callable[[str], Awaitable[None]]],
+        on_final: Optional[Callable[[str], Awaitable[None]]],
+        sample_rate: int,
+        max_retries: int = 2,
     ) -> str:
-        """FunASR WebSocket protocol implementation."""
-        try:
-            import websockets
-        except ImportError:
-            raise RuntimeError("websockets package not installed")
-
-        # Build WAV header for 16kHz mono 16-bit PCM
-        wav_data = self._pcm_to_wav(pcm_data, 16000)
-
-        uri = self.endpoint
-        if not uri.endswith("/"):
-            uri += "/"
-
-        # FunASR protocol: send config first, then audio chunks
-        config = {
-            "mode": self._mode,
-            "chunk_size": [5, 10, 5],
-            "wav_name": "h5",
-            "is_speaking": True,
-        }
-
-        final_text = ""
-        async with websockets.connect(uri) as websocket:
-            # Send config
-            await websocket.send(json.dumps(config))
-
-            # Send audio in chunks (FunASR expects 960 bytes = 30ms @ 16kHz 16bit mono)
-            chunk_size = 960
-            for i in range(0, len(wav_data), chunk_size):
-                chunk = wav_data[i:i + chunk_size]
-                await websocket.send(chunk)
-                await asyncio.sleep(0.01)  # Flow control
-
-            # Send end signal
-            end_config = {"is_speaking": False}
-            await websocket.send(json.dumps(end_config))
-
-            # Collect results
+        """Retry transient transport failures, never fabricate recognition."""
+        for attempt in range(max_retries + 1):
             try:
-                while True:
-                    msg = await asyncio.wait_for(websocket.recv(), timeout=10.0)
-                    data = json.loads(msg)
-
-                    # FunASR response format
-                    text = data.get("text", "")
-                    if not text:
-                        text = data.get("nbest", [{}])[0].get("sentence", "")
-
-                    is_final = data.get("is_final", False)
-
-                    if text:
-                        if is_final:
-                            final_text = text
-                            if on_final:
-                                await on_final(text)
-                        else:
-                            if on_partial:
-                                await on_partial(text)
-
-                    # End of recognition
-                    if data.get("mode") == "offline" and is_final:
-                        break
-
-            except asyncio.TimeoutError:
-                pass
-
-        return final_text
-
-    async def _recognize_http(self, pcm_data: bytes) -> str:
-        """HTTP ASR fallback using Whisper-compatible API."""
-        import httpx
-
-        # Try common ASR HTTP endpoints
-        endpoints = [
-            self.endpoint.replace("ws://", "http://").replace("wss://", "https://"),
-        ]
-
-        wav_data = self._pcm_to_wav(pcm_data, 16000)
-
-        for url in endpoints:
-            try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    files = {"audio": ("audio.wav", wav_data, "audio/wav")}
-                    resp = await client.post(f"{url}/asr", files=files)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        text = data.get("text", data.get("result", ""))
-                        if text:
-                            return text
-            except Exception:
-                continue
-
+                return await self._do_recognize(
+                    audio_chunks, on_partial, on_final, sample_rate
+                )
+            except (websockets.exceptions.ConnectionClosed,
+                    websockets.exceptions.InvalidStatusCode,
+                    OSError, asyncio.TimeoutError, httpx.TransportError) as exc:
+                if attempt == max_retries:
+                    logger.error("ASR recognition failed after %s attempts: %s", attempt + 1, exc)
+                    return ""
+                await asyncio.sleep(0.5 * (attempt + 1))
+            except Exception as exc:
+                logger.error("ASR recognition error: %s", exc)
+                return ""
         return ""
+
+    def _http_url(self) -> str:
+        parts = urlsplit(self.endpoint)
+        return urlunsplit(parts._replace(path=parts.path if parts.path not in ("", "/") else "/asr"))
+
+    async def _do_recognize(
+        self,
+        audio_chunks: List[bytes],
+        on_partial: Optional[Callable[[str], Awaitable[None]]],
+        on_final: Optional[Callable[[str], Awaitable[None]]],
+        sample_rate: int,
+    ) -> str:
+        full_audio = b"".join(audio_chunks)
+        if not full_audio:
+            return ""
+        scheme = urlsplit(self.endpoint).scheme.lower()
+        if scheme in ("http", "https"):
+            text = await self._recognize_http(full_audio, sample_rate)
+            if text and on_final:
+                await on_final(text)
+            return text
+        if scheme not in ("ws", "wss"):
+            raise ValueError("ASR endpoint must use ws, wss, http or https")
+
+        async with websockets.connect(
+            self.endpoint, ping_interval=20, ping_timeout=60,
+            open_timeout=5, close_timeout=5,
+        ) as websocket:
+            await websocket.send(json.dumps({
+                "mode": "online", "chunk_size": [5, 10, 5],
+                "wav_name": "stream", "is_speaking": True,
+                "wav_format": "pcm", "audio_fs": sample_rate,
+            }))
+            for offset in range(0, len(full_audio), 9600):
+                await websocket.send(full_audio[offset:offset + 9600])
+                await asyncio.sleep(0.01)
+            await websocket.send(json.dumps({"is_speaking": False}))
+
+            async def receive_final():
+                while True:
+                    message = await websocket.recv()
+                    if not isinstance(message, str):
+                        continue
+                    try:
+                        data = json.loads(message)
+                    except json.JSONDecodeError:
+                        logger.warning("Ignoring malformed ASR response")
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    text = data.get("text", "")
+                    if not isinstance(text, str):
+                        text = ""
+                    if data.get("is_final") is True:
+                        if text and on_final:
+                            await on_final(text)
+                        # Empty final results mean silence, not a reason to wait.
+                        return text
+                    if text and on_partial:
+                        await on_partial(text)
+
+            # One deadline for the entire receive phase, not per message:
+            # endless partial/malformed messages cannot keep it alive forever.
+            return await asyncio.wait_for(receive_final(), self._response_timeout)
+
+    async def _recognize_http(self, pcm_data: bytes, sample_rate: int = 16000) -> str:
+        """Call the configured custom multipart ASR API (not Whisper API)."""
+        async with httpx.AsyncClient(timeout=self._response_timeout, follow_redirects=False) as client:
+            response = await client.post(
+                self._http_url(),
+                files={"audio": ("audio.wav", self._pcm_to_wav(pcm_data, sample_rate), "audio/wav")},
+            )
+            response.raise_for_status()
+            data = response.json()
+        if not isinstance(data, dict):
+            return ""
+        text = data.get("text", data.get("result", ""))
+        return text if isinstance(text, str) else ""
 
     @staticmethod
     def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 16000) -> bytes:
-        """Create a basic WAV header for raw PCM data."""
-        header = b'RIFF'
-        header += struct.pack('<I', 36 + len(pcm_data))
-        header += b'WAVEfmt '
-        header += struct.pack('<I', 16)
-        header += struct.pack('<H', 1)  # PCM
-        header += struct.pack('<H', 1)  # Mono
-        header += struct.pack('<I', sample_rate)
-        header += struct.pack('<I', sample_rate * 2)
-        header += struct.pack('<H', 2)
-        header += struct.pack('<H', 16)
-        header += b'data'
-        header += struct.pack('<I', len(pcm_data))
-        return header + pcm_data
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(sample_rate)
+            wav.writeframes(pcm_data)
+        return buffer.getvalue()
+
+    async def test_connection(self) -> dict:
+        """Probe reachability, not recognition quality or HTTP model readiness."""
+        try:
+            if urlsplit(self.endpoint).scheme.lower() in ("http", "https"):
+                async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+                    response = await client.get(self._http_url())
+                    # POST-only endpoints commonly reject GET with 405.
+                    if response.status_code != 405:
+                        response.raise_for_status()
+            else:
+                async with websockets.connect(
+                    self.endpoint, ping_interval=None, open_timeout=5, close_timeout=5,
+                ):
+                    pass
+            return {"status": "ok", "message": "Connected to ASR service"}
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
