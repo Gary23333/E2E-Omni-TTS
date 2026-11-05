@@ -75,6 +75,7 @@ export interface GlobalConfig {
   systemSubtitle: string;
   llmEndpoint: string;
   llmApiKey: string;
+  llmApiKeySet?: boolean;
   llmModel: string;
   ttsEndpoint: string;
   ttsModel: string;
@@ -83,6 +84,7 @@ export interface GlobalConfig {
   asrEndpoint: string;
   embedEndpoint: string;
   embedApiKey: string;
+  embedApiKeySet?: boolean;
   embedModel: string;
   llmMode: LLMMode;
   noiseType: NoiseType;
@@ -90,6 +92,11 @@ export interface GlobalConfig {
   customNoiseFile: string | null;
   waitingMusicEnabled: boolean;
 }
+
+export type ConfigUpdate = Partial<GlobalConfig> & {
+  clearLlmApiKey?: boolean;
+  clearEmbedApiKey?: boolean;
+};
 
 // ── Session / Transcript ───────────────────────────────────────────────────
 
@@ -211,3 +218,4 @@ export interface TestConnectionResponse {
   message?: string;
   mode?: string;
 }
+

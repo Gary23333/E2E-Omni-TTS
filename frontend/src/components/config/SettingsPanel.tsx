@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Settings, Volume2, Radio, Mic, Save, Check, ShieldCheck, Monitor, Sparkles, Activity, AlertCircle, Loader2, Database, Play, Square, Upload, Trash2, Headphones } from 'lucide-react';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { testLLM, testTTS, testASR, testEmbed, fetchNoiseSamples, uploadNoiseSample, deleteNoiseSample } from '../../api/client';
+import { testLLM, testTTS, testASR, testEmbed, fetchNoiseSamples, uploadNoiseSample, deleteNoiseSample, getNoiseSampleUrl } from '../../api/client';
 import type { GlobalConfig, NoiseType, LLMMode } from '../../types';
 
 export function SettingsPanel() {
@@ -17,6 +17,9 @@ export function SettingsPanel() {
     waitingMusicEnabled: true,
   });
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [clearKeys, setClearKeys] = useState({ llm: false, embed: false });
   const [testStatus, setTestStatus] = useState<Record<string, { loading: boolean; status: 'ok' | 'error' | null; message?: string }>>({
     llm: { loading: false, status: null },
     tts: { loading: false, status: null },
@@ -63,9 +66,18 @@ export function SettingsPanel() {
   };
 
   const handleSave = async () => {
-    await store.update(form);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setSaving(true);
+    setSaveError('');
+    try {
+      await store.update({ ...form, clearLlmApiKey: clearKeys.llm, clearEmbedApiKey: clearKeys.embed });
+      setClearKeys({ llm: false, embed: false });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      setSaveError('保存失败，请检查配置和本地后端连接。');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleTest = async (type: 'llm' | 'tts' | 'asr' | 'embed') => {
@@ -93,7 +105,7 @@ export function SettingsPanel() {
       setIsPlaying(null);
     } else {
       if (audioRef.current) {
-        audioRef.current.src = `http://localhost:8900/api/config/noise/file/${filename}`;
+        audioRef.current.src = getNoiseSampleUrl(filename);
         audioRef.current.loop = true;
         audioRef.current.play();
         setIsPlaying(filename);
@@ -135,7 +147,7 @@ export function SettingsPanel() {
   return (
     <div className="h-full flex flex-col text-slate-200">
       <audio ref={audioRef} className="hidden" />
-      
+
       {/* Glossy Header */}
       <div className="px-10 py-8 border-b border-white/[0.06] flex items-center justify-between bg-white/[0.02] backdrop-blur-md">
         <div className="flex items-center gap-4">
@@ -147,19 +159,21 @@ export function SettingsPanel() {
             <p className="text-sm text-slate-500 mt-1 font-medium">全局模型端点、品牌信息与音频引擎配置</p>
           </div>
         </div>
-        
-        <button 
-          onClick={handleSave} 
+
+        <button
+          onClick={handleSave}
+          disabled={saving}
           className="group relative flex items-center gap-2 px-8 py-3.5 bg-white text-slate-900 rounded-2xl font-bold text-sm shadow-[0_0_20px_rgba(255,255,255,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.2)] transition-all duration-300 hover:-translate-y-0.5"
         >
           {saved ? <Check size={18} className="text-emerald-600" /> : <Save size={18} />}
-          {saved ? '配置已保存' : '保存全局设置'}
+          {saving ? '保存中…' : saved ? '配置已保存' : '保存全局设置'}
         </button>
       </div>
 
+      {saveError && <p role="alert" className="px-10 py-3 text-sm text-red-400">{saveError}</p>}
       <div className="flex-1 overflow-y-auto p-10 no-scrollbar bg-slate-950/20">
         <div className="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
-          
+
           {/* Brand Identity */}
           <Section icon={<Monitor size={20} />} title="品牌标识" className="md:col-span-2">
              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -173,7 +187,7 @@ export function SettingsPanel() {
              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <TestCard label="LLM 服务" status={testStatus.llm} onTest={() => handleTest('llm')} />
                 <TestCard label="TTS 服务" status={testStatus.tts} onTest={() => handleTest('tts')} />
-                <TestCard label="ASR 服务" status={testStatus.asr} onTest={() => handleTest('asr')} disabled={form.llmMode === 'omni'} />
+                <TestCard label="ASR 服务" status={testStatus.asr} onTest={() => handleTest('asr')}  />
                 <TestCard label="Embedding" status={testStatus.embed} onTest={() => handleTest('embed')} />
              </div>
              {Object.values(testStatus).some(s => s.status === 'error') && (
@@ -208,14 +222,18 @@ export function SettingsPanel() {
           {/* LLM Config */}
           <Section icon={<ShieldCheck size={20} />} title="语言模型 (LLM)">
             <Field label="API 基准端点" value={form.llmEndpoint} onChange={v => set('llmEndpoint', v)} placeholder="http://api.openai.com/v1" />
-            <Field label="API 凭据 (Key)" value={form.llmApiKey} onChange={v => set('llmApiKey', v)} placeholder="sk-..." type="password" />
+            <Field label="API 凭据 (Key)" value={form.llmApiKey} onChange={v => { set('llmApiKey', v); setClearKeys(keys => ({ ...keys, llm: false })); }} placeholder={store.llmApiKeySet ? '已保存，留空保留；输入新值替换' : '尚未设置'} type="password" />
+            <p className="text-xs text-slate-500">密钥不会回传浏览器。更换端点时，请重新填写该端点的密钥。</p>
+            {store.llmApiKeySet && <button type="button" className="text-xs text-red-300" onClick={() => { set('llmApiKey', ''); setClearKeys(keys => ({ ...keys, llm: !keys.llm })); }}>{clearKeys.llm ? '取消清除密钥' : '清除已保存密钥（保存后生效）'}</button>}
             <Field label="部署模型 ID" value={form.llmModel} onChange={v => set('llmModel', v)} placeholder="gpt-4o" />
           </Section>
 
           {/* Embedding Config */}
           <Section icon={<Database size={20} />} title="向量模型 (Embedding)">
             <Field label="API 基准端点" value={form.embedEndpoint} onChange={v => set('embedEndpoint', v)} placeholder="http://api.openai.com/v1" />
-            <Field label="API 凭据 (Key)" value={form.embedApiKey} onChange={v => set('embedApiKey', v)} placeholder="sk-..." type="password" />
+            <Field label="API 凭据 (Key)" value={form.embedApiKey} onChange={v => { set('embedApiKey', v); setClearKeys(keys => ({ ...keys, embed: false })); }} placeholder={store.embedApiKeySet ? '已保存，留空保留；输入新值替换' : '尚未设置'} type="password" />
+            <p className="text-xs text-slate-500">密钥不会回传浏览器。更换端点时，请重新填写该端点的密钥。</p>
+            {store.embedApiKeySet && <button type="button" className="text-xs text-red-300" onClick={() => { set('embedApiKey', ''); setClearKeys(keys => ({ ...keys, embed: !keys.embed })); }}>{clearKeys.embed ? '取消清除密钥' : '清除已保存密钥（保存后生效）'}</button>}
             <Field label="模型 ID" value={form.embedModel} onChange={v => set('embedModel', v)} placeholder="text-embedding-3-small" />
             <div className="p-3 rounded-xl bg-primary-500/5 border border-primary-500/10">
                <p className="text-[10px] text-slate-500 leading-tight">若留空端点，系统将尝试加载本地 Sentence-Transformers 模型。</p>
@@ -234,10 +252,10 @@ export function SettingsPanel() {
 
           {/* ASR & Network */}
           <Section icon={<Mic size={20} />} title="语音识别 (ASR)">
-            <Field label="WebSocket 端点" value={form.asrEndpoint} onChange={v => set('asrEndpoint', v)} placeholder="ws://localhost:10095" />
+            <Field label="ASR 端点（WebSocket / HTTP）" value={form.asrEndpoint} onChange={v => set('asrEndpoint', v)} placeholder="ws://localhost:10095" />
             <div className="mt-6 p-4 rounded-xl bg-primary-500/5 border border-primary-500/10">
               <p className="text-[10px] uppercase tracking-widest text-primary-400 font-bold mb-1">状态</p>
-              <p className="text-xs text-slate-400 leading-relaxed">ASR 引擎仅在「ASR+Text」模式下生效。浏览器端支持采样率自动重采样。</p>
+              <p className="text-xs text-slate-400 leading-relaxed">ASR 用于语音转写和 Omni 降级。HTTP 为自定义 audio 文件上传接口，不是 Whisper API。浏览器端支持采样率自动重采样。</p>
             </div>
           </Section>
 
@@ -263,7 +281,7 @@ export function SettingsPanel() {
                             {type === 'none' ? '安静环境' : type === 'cafe' ? '午后咖啡厅' : type === 'office' ? '写字楼' : '嘈杂街道'}
                           </span>
                           {type !== 'none' && (
-                            <div 
+                            <div
                               onClick={(e) => { e.stopPropagation(); togglePreview(`${type}.wav`); }}
                               className={`p-1.5 rounded-lg ${isPlaying === `${type}.wav` ? 'bg-white/20 text-white' : 'bg-black/20 text-slate-500 hover:text-white'}`}
                             >
@@ -279,7 +297,7 @@ export function SettingsPanel() {
                   <div className="space-y-4">
                     <div className="flex items-center justify-between mb-3">
                       <label className="block text-xs font-black text-slate-500 uppercase tracking-widest">自定义环境音</label>
-                      <button 
+                      <button
                         onClick={() => fileInputRef.current?.click()}
                         className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-primary-500/10 text-primary-400 border border-primary-500/20 text-[10px] font-black uppercase tracking-widest hover:bg-primary-500/20 transition-all"
                       >
@@ -291,7 +309,7 @@ export function SettingsPanel() {
 
                     <div className="max-h-40 overflow-y-auto pr-2 custom-scrollbar space-y-2">
                       {noiseSamples.filter(s => !['cafe.wav', 'office.wav', 'street.wav'].includes(s)).map(file => (
-                        <div 
+                        <div
                           key={file}
                           className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
                             form.noiseType === 'custom' && form.customNoiseFile === file
@@ -299,21 +317,21 @@ export function SettingsPanel() {
                               : 'bg-white/5 border-white/5 text-slate-400 hover:border-white/10'
                           }`}
                         >
-                          <button 
+                          <button
                             onClick={() => { set('noiseType', 'custom'); set('customNoiseFile', file); }}
                             className="flex-1 text-xs font-medium truncate text-left"
                           >
                             {file}
                           </button>
-                          
+
                           <div className="flex items-center gap-1.5">
-                            <button 
+                            <button
                               onClick={() => togglePreview(file)}
                               className={`p-1.5 rounded-lg ${isPlaying === file ? 'bg-accent-500 text-white shadow-glow' : 'bg-white/5 hover:bg-white/10'}`}
                             >
                               {isPlaying === file ? <Square size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" />}
                             </button>
-                            <button 
+                            <button
                               onClick={() => handleDeleteNoise(file)}
                               className="p-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 hover:text-red-400 transition-colors"
                             >
@@ -407,8 +425,8 @@ function ModeCard({ title, desc, active, onClick, badge }: { title: string; desc
     <button
       onClick={onClick}
       className={`relative flex-1 p-6 rounded-[2rem] border-2 text-left transition-all duration-500 group overflow-hidden ${
-        active 
-          ? 'border-primary-500/50 bg-primary-500/10 shadow-[0_0_40px_rgba(34,197,94,0.1)]' 
+        active
+          ? 'border-primary-500/50 bg-primary-500/10 shadow-[0_0_40px_rgba(34,197,94,0.1)]'
           : 'border-white/5 bg-slate-900/40 hover:border-white/10 hover:bg-slate-900/60'
       }`}
     >
@@ -428,8 +446,8 @@ function ModeCard({ title, desc, active, onClick, badge }: { title: string; desc
   );
 }
 
-function TestCard({ label, status, onTest, disabled }: { 
-  label: string; 
+function TestCard({ label, status, onTest, disabled }: {
+  label: string;
   status: { loading: boolean; status: 'ok' | 'error' | null; message?: string };
   onTest: () => void;
   disabled?: boolean;
@@ -443,13 +461,13 @@ function TestCard({ label, status, onTest, disabled }: {
         {status.status === 'ok' && <Check size={16} className="text-emerald-400" />}
         {status.status === 'error' && <AlertCircle size={16} className="text-red-400" />}
       </div>
-      
+
       <button
         onClick={onTest}
         disabled={status.loading || disabled}
         className={`w-full py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-          status.status === 'ok' 
-            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
+          status.status === 'ok'
+            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
             : status.status === 'error'
             ? 'bg-red-500/20 text-red-400 border border-red-500/30'
             : 'bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10'
@@ -457,7 +475,7 @@ function TestCard({ label, status, onTest, disabled }: {
       >
         {status.loading ? <Loader2 size={14} className="animate-spin mx-auto" /> : status.status ? '重新测试' : '测试连接'}
       </button>
-      
+
       {status.message && (
         <p className="mt-2 text-[8px] text-red-400/60 font-mono truncate" title={status.message}>
           {status.message}
@@ -466,3 +484,4 @@ function TestCard({ label, status, onTest, disabled }: {
     </div>
   );
 }
+

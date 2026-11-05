@@ -65,3 +65,9 @@ logs/
 
 # Local call transcripts may contain personal conversation data
 backend/data/configs/sessions.json
+
+# Keep bundled samples, but never publish uploaded local audio.
+backend/data/noise_samples/*
+!backend/data/noise_samples/cafe.wav
+!backend/data/noise_samples/office.wav
+!backend/data/noise_samples/street.wav

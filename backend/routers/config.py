@@ -1,13 +1,15 @@
 import httpx
-import asyncio
-import socket
 import os
-import shutil
+import uuid
+from pathlib import Path
+from pydantic import ValidationError
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from schemas.models import GlobalConfig
 from core.json_store import ConfigStore
 from core.rag_engine import RAGEngine
-from core.noise_manager import NOISE_DIR
+from core.noise_manager import NOISE_DIR, noise_manager
+from core.asr_client import ASRClient
+from core.upload_safety import AUDIO_SUFFIXES, safe_path, safe_filename, read_upload
 
 router = APIRouter()
 
@@ -24,26 +26,58 @@ def create_router(config_store: ConfigStore, rag_engine: RAGEngine) -> APIRouter
     return router
 
 
+def _public_config(config: dict) -> dict:
+    result = dict(config)
+    for field in ("llmApiKey", "embedApiKey"):
+        result[field + "Set"] = bool(result.get(field))
+        result[field] = ""
+    return result
+
+
 @router.get("")
 async def get_config():
-    current = GlobalConfig(**_config_store.get_all()).model_dump()
-    return _config_store.update(current)
+    return _public_config(GlobalConfig(**_config_store.get_all()).model_dump())
 
 
 @router.put("")
 async def update_config(updates: dict):
-    # Validate against model
+    updates = dict(updates)
     current = _config_store.get_all()
+    for field, endpoint, clear in (
+        ("llmApiKey", "llmEndpoint", "clearLlmApiKey"),
+        ("embedApiKey", "embedEndpoint", "clearEmbedApiKey"),
+    ):
+        updates.pop(field + "Set", None)  # Read-only display metadata.
+        should_clear = updates.pop(clear, False)
+        if type(should_clear) is not bool:
+            raise HTTPException(422, "Clear-key flags must be booleans")
+        supplied = updates.get(field)
+        if supplied is not None and not isinstance(supplied, str):
+            raise HTTPException(422, "API keys must be strings")
+        if should_clear and supplied:
+            raise HTTPException(422, "Cannot clear and replace a key together")
+        endpoint_changed = endpoint in updates and updates[endpoint] != current.get(endpoint)
+        if should_clear or (endpoint_changed and not supplied):
+            updates[field] = ""
+        elif not supplied:
+            # Blank/redacted forms preserve saved credentials unless explicitly
+            # cleared. Never carry a saved key over to a different destination.
+            updates.pop(field, None)
+    unknown = set(updates) - set(GlobalConfig.model_fields)
+    if unknown:
+        raise HTTPException(422, "Unknown configuration fields")
     current.update(updates)
-    validated = GlobalConfig(**current).model_dump()
+    try:
+        validated = GlobalConfig(**current).model_dump()
+    except ValidationError:
+        # Do not echo secret-bearing request values in validation errors.
+        raise HTTPException(422, "Invalid configuration") from None
+    if validated.get("customNoiseFile"):
+        safe_path(NOISE_DIR, validated["customNoiseFile"], AUDIO_SUFFIXES)
     result = _config_store.update(validated)
-
-    # Update RAG engine config if embed settings changed
-    if any(k in updates for k in ['embedEndpoint', 'embedApiKey', 'embedModel']):
-        cfg = GlobalConfig(**result)
-        _rag_engine.set_config(cfg)
-
-    return result
+    if any(k in updates for k in ["embedEndpoint", "embedApiKey", "embedModel"]):
+        _rag_engine.set_config(GlobalConfig(**result))
+    return _public_config(result)
 
 
 @router.post("/test_llm")
@@ -71,26 +105,7 @@ async def test_tts():
 @router.post("/test_asr")
 async def test_asr():
     config = GlobalConfig(**_config_store.get_all())
-    if not config.asrEndpoint.startswith("ws"):
-        return {"status": "error", "message": "Invalid ASR endpoint (must be ws/wss)"}
-
-    try:
-        host_port = config.asrEndpoint.replace("ws://", "").replace("wss://", "").split("/")[0]
-        if ":" in host_port:
-            host, port = host_port.split(":")
-            port = int(port)
-        else:
-            host = host_port
-            port = 80
-
-        loop = asyncio.get_event_loop()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setblocking(False)
-        await asyncio.wait_for(loop.sock_connect(sock, (host, port)), timeout=3.0)
-        sock.close()
-        return {"status": "ok"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return await ASRClient(config.asrEndpoint).test_connection()
 
 
 @router.post("/test_embed")
@@ -122,20 +137,22 @@ async def list_noise_samples():
 @router.post("/noise/upload")
 async def upload_noise_sample(file: UploadFile = File(...)):
     """Upload a new noise sample."""
+    original_name = safe_filename(file.filename or "", AUDIO_SUFFIXES)
+    content = await read_upload(file)
     NOISE_DIR.mkdir(parents=True, exist_ok=True)
-    file_path = NOISE_DIR / file.filename
-    try:
-        with open(file_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-        return {"filename": file.filename}
-    except Exception as e:
-        raise HTTPException(500, f"Upload failed: {e}")
+    filename = f"{uuid.uuid4().hex}{Path(original_name).suffix.lower()}"
+    file_path = safe_path(NOISE_DIR, filename, AUDIO_SUFFIXES)
+    with file_path.open("xb") as handle:
+        handle.write(content)
+    return {"filename": filename}
 
 
 @router.delete("/noise/{filename}")
 async def delete_noise_sample(filename: str):
     """Delete a noise sample."""
-    file_path = NOISE_DIR / filename
-    if file_path.exists():
-        os.remove(file_path)
+    file_path = safe_path(NOISE_DIR, filename, AUDIO_SUFFIXES)
+    if file_path.is_file():
+        file_path.unlink()
+        noise_manager._cache.clear()
     return {"ok": True}
+

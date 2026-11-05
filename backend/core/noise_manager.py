@@ -3,6 +3,8 @@ import logging
 import numpy as np
 from pathlib import Path
 from typing import Optional, Dict
+from core.upload_safety import AUDIO_SUFFIXES, safe_path
+from fastapi import HTTPException
 
 try:
     import librosa
@@ -32,7 +34,10 @@ class NoiseManager:
             
         file_path = None
         if noise_type == "custom" and custom_file:
-            file_path = NOISE_DIR / custom_file
+            try:
+                file_path = safe_path(NOISE_DIR, custom_file, AUDIO_SUFFIXES)
+            except HTTPException:
+                return None
         else:
             # Look for default samples like cafe.wav, office.wav, etc.
             for ext in [".wav", ".mp3", ".m4a"]:
@@ -82,3 +87,4 @@ class NoiseManager:
 
 # Global instance
 noise_manager = NoiseManager()
+

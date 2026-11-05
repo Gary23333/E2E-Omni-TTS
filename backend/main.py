@@ -8,6 +8,7 @@ from routers import agents, rag, skills, config, ws_voice
 from core.noise_manager import NOISE_DIR
 from core.rag_engine import RAGEngine
 from core.json_store import ConfigStore
+from core.local_access import LocalOnlyMiddleware
 from schemas.models import GlobalConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -47,6 +48,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(LocalOnlyMiddleware)
 
 # Pass dependencies to routers
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])

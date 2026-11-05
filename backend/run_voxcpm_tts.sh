@@ -14,4 +14,5 @@ print(path)
 PY
 
 echo "[VoxCPM2] Starting OpenAI-compatible TTS server on :8001"
-VOXCPM_MODEL_PATH="${MODEL_DIR}" exec .tts-venv/bin/python -m uvicorn voxcpm_tts_server:app --host 0.0.0.0 --port 8001
+VOXCPM_MODEL_PATH="${MODEL_DIR}" exec .tts-venv/bin/python -m uvicorn voxcpm_tts_server:app --host 127.0.0.1 --port 8001
+

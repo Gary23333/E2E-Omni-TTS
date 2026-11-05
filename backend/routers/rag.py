@@ -8,6 +8,7 @@ from pathlib import Path
 from schemas.models import RAGDocument, DocStatus, GlobalConfig
 from core.json_store import JsonStore, ConfigStore
 from core.rag_engine import RAGEngine, RAG_DIR
+from core.upload_safety import DOCUMENT_SUFFIXES, safe_filename, safe_path, read_upload
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -34,6 +35,9 @@ async def list_documents():
 
 @router.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
+    filename = safe_filename(file.filename or "", DOCUMENT_SUFFIXES)
+    content = await read_upload(file)
+
     # Sync config before processing
     cfg = GlobalConfig(**_config_store.get_all())
     _rag_engine.set_config(cfg)
@@ -42,15 +46,14 @@ async def upload_document(file: UploadFile = File(...)):
     doc_dir = RAG_DIR / doc_id
     doc_dir.mkdir(parents=True, exist_ok=True)
 
-    file_path = doc_dir / file.filename
-    with open(file_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+    file_path = safe_path(doc_dir, filename, DOCUMENT_SUFFIXES)
+    with file_path.open("xb") as handle:
+        handle.write(content)
 
     # Create document record
     doc = RAGDocument(
         id=doc_id,
-        filename=file.filename,
+        filename=filename,
         status=DocStatus.PROCESSING,
         enabled=True,
         uploadedAt=datetime.now().isoformat(),
@@ -59,7 +62,7 @@ async def upload_document(file: UploadFile = File(...)):
 
     # Process
     try:
-        chunk_count = _rag_engine.process_document(doc_id, str(file_path), file.filename)
+        chunk_count = _rag_engine.process_document(doc_id, str(file_path), filename)
         doc_store.update(doc_id, {
             "status": DocStatus.READY.value,
             "chunkCount": chunk_count,
@@ -104,3 +107,4 @@ async def toggle_document(doc_id: str):
     _rag_engine.set_config(cfg)
     _rag_engine.rebuild_index()
     return doc_store.get(doc_id)
+

@@ -48,3 +48,6 @@ export const uploadNoiseSample = (file: File) => {
 };
 export const deleteNoiseSample = (filename: string) => api.delete(`/config/noise/${filename}`).then(r => r.data);
 
+
+
+export const getNoiseSampleUrl = (filename: string) => api.getUri({ url: `/config/noise/file/${encodeURIComponent(filename)}` });

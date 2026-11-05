@@ -20,6 +20,7 @@ function loadSource(path, mocks = {}) {
   vm.runInNewContext(outputText, {
     module,
     exports: module.exports,
+    setTimeout: callback => { callback(); return 0; },
     require: name => Object.hasOwn(mocks, name) ? mocks[name] : require(name),
   }, { filename: path });
   return module.exports;
@@ -112,4 +113,78 @@ test('each application route renders the expected panel', () => {
     const { default: App } = loadSource('../src/App.tsx', mocks);
     assert.ok(renderToStaticMarkup(React.createElement(App)).includes(`<section>${expected}</section>`));
   }
+});
+
+
+function settingsHarness() {
+  const states = [];
+  let cursor = 0;
+  let mounted = false;
+  const effects = [];
+  const updates = [];
+  const store = {
+    systemTitle: 'Test', systemSubtitle: 'Local',
+    llmEndpoint: 'http://localhost:8000/v1', llmApiKey: '', llmApiKeySet: true, llmModel: 'test',
+    embedEndpoint: 'http://localhost:8000/v1', embedApiKey: '', embedApiKeySet: true, embedModel: 'test',
+    ttsEndpoint: '', ttsModel: '', ttsVoiceDescriptor: '', ttsResponseFormat: 'pcm', asrEndpoint: '',
+    llmMode: 'text_asr', noiseType: 'none', noiseVolume: 0, customNoiseFile: null, waitingMusicEnabled: false,
+    update: async data => updates.push(data),
+  };
+  const { SettingsPanel } = loadSource('../src/components/config/SettingsPanel.tsx', {
+    react: {
+      useState: initial => {
+        const index = cursor++;
+        if (!(index in states)) states[index] = initial;
+        return [states[index], value => { states[index] = typeof value === 'function' ? value(states[index]) : value; }];
+      },
+      useEffect: callback => { if (!mounted) effects.push(callback); },
+      useRef: current => ({ current }),
+    },
+    '../../stores/settingsStore': { useSettingsStore: () => store },
+    '../../api/client': { fetchNoiseSamples: async () => [], getNoiseSampleUrl: name => name },
+  });
+  function render() {
+    cursor = 0;
+    return SettingsPanel();
+  }
+  render();
+  mounted = true;
+  for (const effect of effects) effect();
+  function collect(node, predicate, matches = []) {
+    if (Array.isArray(node)) node.forEach(child => collect(child, predicate, matches));
+    else if (node && typeof node === 'object') {
+      if (predicate(node)) matches.push(node);
+      collect(node.props?.children, predicate, matches);
+    }
+    return matches;
+  }
+  return { render, collect, updates };
+}
+
+test('settings displays saved-key status and submits an explicit clear action', async () => {
+  const { render, collect, updates } = settingsHarness();
+  let tree = render();
+  const keyFields = collect(tree, node => node.props?.label === 'API 凭据 (Key)');
+  assert.equal(keyFields.length, 2);
+  assert.equal(keyFields[0].props.value, '');
+  assert.match(keyFields[0].props.placeholder, /已保存/);
+  const clearButtons = collect(tree, node => node.type === 'button' && node.props.children === '清除已保存密钥（保存后生效）');
+  clearButtons[0].props.onClick();
+  tree = render();
+  await collect(tree, node => node.type === 'button' && 'disabled' in node.props)[0].props.onClick();
+  assert.equal(updates[0].clearLlmApiKey, true);
+  assert.equal(updates[0].clearEmbedApiKey, false);
+  assert.equal(updates[0].llmApiKey, '');
+});
+
+test('entering a replacement key cancels a pending clear action', async () => {
+  const { render, collect, updates } = settingsHarness();
+  let tree = render();
+  collect(tree, node => node.type === 'button' && node.props.children === '清除已保存密钥（保存后生效）')[0].props.onClick();
+  tree = render();
+  collect(tree, node => node.props?.label === 'API 凭据 (Key)')[0].props.onChange('synthetic-replacement');
+  tree = render();
+  await collect(tree, node => node.type === 'button' && 'disabled' in node.props)[0].props.onClick();
+  assert.equal(updates[0].clearLlmApiKey, false);
+  assert.equal(updates[0].llmApiKey, 'synthetic-replacement');
 });

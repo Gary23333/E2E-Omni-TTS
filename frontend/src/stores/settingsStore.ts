@@ -1,11 +1,11 @@
 import { create } from 'zustand';
-import type { GlobalConfig } from '../types';
+import type { GlobalConfig, ConfigUpdate } from '../types';
 import { fetchConfig, updateConfig } from '../api/client';
 
 interface SettingsState extends GlobalConfig {
   loaded: boolean;
   load: () => Promise<void>;
-  update: (partial: Partial<GlobalConfig>) => Promise<void>;
+  update: (partial: ConfigUpdate) => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -43,3 +43,4 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set(data);
   },
 }));
+

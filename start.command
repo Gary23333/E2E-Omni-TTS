@@ -1,4 +1,13 @@
 #!/bin/bash
+set -euo pipefail
+
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "This launcher requires macOS. Use the README commands on Linux/Windows."
+    exit 1
+fi
+for command in python3 node npm osascript; do
+    command -v "$command" >/dev/null || { echo "Missing command: $command"; exit 1; }
+done
 cd "$(dirname "$0")"
 
 # Terminal colors
@@ -48,7 +57,7 @@ cd frontend
 # Install deps if needed
 if [ ! -d "node_modules" ]; then
     echo "  → 安装前端依赖（首次运行需要几分钟）..."
-    npm install --silent
+    npm ci --silent
 fi
 
 # Start frontend in a new Terminal tab
@@ -72,3 +81,4 @@ echo ""
 echo "关闭此窗口不影响运行，关闭对应 Terminal 标签页即可停止服务。"
 echo ""
 read -p "按回车键关闭此窗口..."
+
