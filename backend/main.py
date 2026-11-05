@@ -40,8 +40,10 @@ app = FastAPI(title="OmniVoice - End-to-End Voice Agent", version="0.5.0", lifes
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    # This app has no authentication. Only the local development frontend may
+    # read configuration, which can contain model-provider API keys.
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -76,4 +78,4 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8900, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8900, reload=True)

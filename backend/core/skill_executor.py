@@ -118,19 +118,23 @@ class SkillExecutor:
     def update_skills(self, skills: list[Skill]):
         self._skills = {s.name: s for s in skills if s.enabled}
 
-    def get_tool_definitions(self) -> str:
+    def get_tool_definitions(self, enabled_tool_ids: list[str] | None = None) -> str:
         """Format enabled skills as tool definitions for LLM prompt."""
         lines = []
         for name, skill in self._skills.items():
+            if enabled_tool_ids is not None and skill.id not in enabled_tool_ids:
+                continue
             params = skill.parameters.get("properties", {})
             param_str = ", ".join(f"{k}: {v.get('type', 'string')}" for k, v in params.items())
             lines.append(f"- {name}({param_str}): {skill.description}")
         return "\n".join(lines) if lines else "无可用工具"
 
-    def get_tools_json_schema(self) -> list[dict]:
+    def get_tools_json_schema(self, enabled_tool_ids: list[str] | None = None) -> list[dict]:
         """Return OpenAI function-calling compatible tool definitions."""
         tools = []
         for name, skill in self._skills.items():
+            if enabled_tool_ids is not None and skill.id not in enabled_tool_ids:
+                continue
             tools.append({
                 "type": "function",
                 "function": {
@@ -152,18 +156,30 @@ class SkillExecutor:
                 data, _ = decoder.raw_decode(candidate.lstrip())
             except json.JSONDecodeError:
                 continue
-            if isinstance(data, dict) and "tool_call" in data:
-                tc = data["tool_call"]
-                if isinstance(tc, dict):
-                    return tc.get("name", ""), tc.get("arguments", {})
+            if not isinstance(data, dict):
+                continue
+            tc = data.get("__tool_call__", data.get("tool_call"))
+            if not isinstance(tc, dict):
+                continue
+            name = tc.get("name")
+            arguments = tc.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(name, str) and name and isinstance(arguments, dict):
+                return name, arguments
 
         return None
 
-    async def execute(self, tool_name: str, arguments: dict) -> str:
+    async def execute(self, tool_name: str, arguments: dict, enabled_tool_ids: list[str] | None = None) -> str:
         """Execute a skill and return the result."""
         skill = self._skills.get(tool_name)
         if not skill:
             return f"未知工具: {tool_name}"
+        if enabled_tool_ids is not None and skill.id not in enabled_tool_ids:
+            return f"当前客服未获授权使用工具: {tool_name}"
 
         if skill.type == SkillType.BUILTIN:
             func = BUILTIN_SKILLS.get(tool_name)

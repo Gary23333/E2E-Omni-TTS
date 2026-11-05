@@ -5,7 +5,7 @@ import { useCallStore } from '../stores/callStore';
 export function useWebSocket() {
   const clientRef = useRef<VoiceWSClient | null>(null);
 
-  const connect = useCallback(async (sessionId: string) => {
+  const connect = useCallback(async (sessionId: string, onAudioChunk?: (data: ArrayBuffer) => void) => {
     if (clientRef.current) {
       clientRef.current.disconnect();
     }
@@ -50,10 +50,6 @@ export function useWebSocket() {
           store.setLLMPartial('');
           break;
 
-        case 'tts_chunk':
-          // Audio chunks handled by binary handler
-          break;
-
         case 'tts_done':
           store.setTTSPlaying(false);
           break;
@@ -86,6 +82,10 @@ export function useWebSocket() {
           break;
       }
     });
+
+    if (onAudioChunk) {
+      client.onBinary(onAudioChunk);
+    }
 
     await client.connect();
     return client;

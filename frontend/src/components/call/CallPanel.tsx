@@ -67,10 +67,7 @@ export function CallPanel() {
     call.setLLMPartial('');
 
     try {
-      const client = await ws.connect(sessionId);
-
-      // Register binary handler for audio chunks
-      ws.onBinary((data: ArrayBuffer) => {
+      await ws.connect(sessionId, (data: ArrayBuffer) => {
         player.playChunk(data);
       });
 
@@ -112,7 +109,7 @@ export function CallPanel() {
 
   return (
     <div className="h-full flex flex-col bg-slate-950/40 relative overflow-hidden">
-      
+
       {/* Dynamic Header */}
       <div className="px-10 py-8 border-b border-white/[0.06] bg-white/[0.02] backdrop-blur-xl z-20">
         <div className="flex items-center justify-between">
@@ -123,7 +120,7 @@ export function CallPanel() {
                   <Headphones size={28} className={isActive ? 'text-primary-400 animate-bounce' : 'text-slate-500'} />
                </div>
             </div>
-            
+
             <div className="flex flex-col">
               <div className="flex items-center gap-3">
                 <h2 className="text-2xl font-black tracking-tight text-white uppercase">
@@ -208,13 +205,13 @@ export function CallPanel() {
 
       {/* Immersive Audio/Transcript Area */}
       <div className="flex-1 flex flex-col overflow-hidden relative group">
-        
+
         {/* Decorative elements */}
         <div className="absolute top-0 inset-x-0 h-32 bg-gradient-to-b from-slate-950/40 to-transparent z-10 pointer-events-none" />
         <div className="absolute bottom-0 inset-x-0 h-32 bg-gradient-to-t from-slate-950/40 to-transparent z-10 pointer-events-none" />
 
-        <div 
-          ref={transcriptRef} 
+        <div
+          ref={transcriptRef}
           className="flex-1 overflow-y-auto px-10 py-12 space-y-8 no-scrollbar scroll-smooth"
         >
           <TranscriptPanel entries={call.transcript} partialText={call.llmPartialText} agentName={call.currentAgentName} />
@@ -241,7 +238,7 @@ export function CallPanel() {
           </div>
         ) : (
           <div className="max-w-5xl mx-auto flex items-center gap-6">
-            
+
             {/* Real-time Interaction Input */}
             {!useVoiceInput && (
               <div className="flex-1 flex gap-3 p-1.5 bg-slate-900/60 rounded-[2.5rem] border border-white/5 focus-within:border-primary-500/50 focus-within:bg-slate-900/80 transition-all duration-500 group shadow-2xl">

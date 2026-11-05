@@ -61,3 +61,7 @@ logs/
 # ── Temporary files ──
 *.tmp
 *.temp
+
+
+# Local call transcripts may contain personal conversation data
+backend/data/configs/sessions.json

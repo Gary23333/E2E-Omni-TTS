@@ -134,7 +134,7 @@ class AgentManager:
 
         # Tools section
         tools_section = ""
-        tool_defs = self.skill_executor.get_tool_definitions()
+        tool_defs = self.skill_executor.get_tool_definitions(agent.enabledToolIds)
         if tool_defs and tool_defs != "无可用工具":
             tools_section = TOOL_CALL_TEMPLATE.format(tool_definitions=tool_defs)
 
@@ -174,6 +174,8 @@ class AgentManager:
             logger.info(f"LLM Chat Round {round_idx+1}")
             # Stream LLM response
             full_response = ""
+            streamed_response = ""
+            defer_output = False
             try:
                 stream = await self.llm.chat(
                     messages=messages,
@@ -185,9 +187,15 @@ class AgentManager:
 
                 async for token in stream:
                     full_response += token
-                    # Call on_token for each token to enable real-time streaming
-                    if on_token and round_idx == 0:
-                        await on_token(token)
+                    # Hold possible control syntax until it can be parsed. Tool
+                    # JSON and handoff markers must never reach the UI or TTS.
+                    if on_token and not defer_output:
+                        control_positions = [token.find(ch) for ch in "{[`" if ch in token]
+                        visible = token[:min(control_positions)] if control_positions else token
+                        if visible:
+                            await on_token(visible)
+                            streamed_response += visible
+                        defer_output = bool(control_positions)
 
                 logger.info(f"LLM full response received: {full_response}")
             except Exception as e:
@@ -209,7 +217,7 @@ class AgentManager:
                     await on_waiting(WAITING_MESSAGES["tool_call"])
 
                 # Execute tool
-                result = await self.skill_executor.execute(tool_name, arguments)
+                result = await self.skill_executor.execute(tool_name, arguments, agent.enabledToolIds)
 
                 if on_tool_end:
                     await on_tool_end(tool_name)
@@ -221,12 +229,25 @@ class AgentManager:
                 )})
                 continue
 
+            # Do not speak malformed/incomplete tool instructions.
+            if '"tool_call"' in full_response or '"__tool_call__"' in full_response:
+                return "抱歉，工具请求格式不正确，请稍后再试。", None
+
+            # Keep the deferred suffix before trimming the returned response.
+            # Already-streamed whitespace must not shift the suffix boundary.
+            unstreamed_response = full_response[len(streamed_response):]
+
             # Check for handoff
             handoff_match = re.search(r'\[HANDOFF:(\w+)\]', full_response)
             handoff_target = None
             if handoff_match:
                 handoff_target = handoff_match.group(1)
                 full_response = re.sub(r'\[HANDOFF:\w+\]', '', full_response).strip()
+
+            if on_token:
+                unstreamed_response = re.sub(r'\[HANDOFF:\w+\]', '', unstreamed_response)
+                if unstreamed_response:
+                    await on_token(unstreamed_response)
 
             # Save to history
             self._history.append({"role": "user", "content": user_message})
@@ -252,15 +273,15 @@ class AgentManager:
         Process audio input directly for Omni mode.
         """
         self._active_agent = agent
-        
+
         system_prompt = AGENT_SYSTEM_PROMPT.format(
             name=agent.name,
             role=agent.role,
             system_prompt=agent.systemPrompt,
-            rag_context="", 
+            rag_context="",
             tools_section="",
         )
-        
+
         messages = [
             {"role": "system", "content": system_prompt},
             *self._history,
@@ -299,7 +320,7 @@ class AgentManager:
         # Save to history
         self._history.append({"role": "user", "content": text})
         self._history.append({"role": "assistant", "content": full_response})
-        
+
         return full_response, None
 
     async def synthesize_speech(
